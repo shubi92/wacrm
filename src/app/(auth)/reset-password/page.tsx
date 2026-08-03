@@ -31,17 +31,59 @@ export default function ResetPasswordPage() {
   const router = useRouter();
   const supabase = createClient();
 
-  // Arriving here without a session means the link was bad, expired, or
-  // already used. Say so plainly rather than failing on submit.
+  // Two link shapes reach this page and only one of them arrives with a
+  // session already in place:
+  //
+  //   PKCE     — browser-initiated resetPasswordForEmail sends `?code=`,
+  //              which /auth/callback exchanges into a cookie before
+  //              forwarding here. Nothing left to do.
+  //   implicit — admin-generated recovery links carry the tokens in the URL
+  //              fragment instead. The fragment is never sent to the server,
+  //              so no server route can see it; we have to read it here and
+  //              establish the session client-side.
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    const init = async () => {
+      const hash = window.location.hash.slice(1);
+      if (hash) {
+        const params = new URLSearchParams(hash);
+        const access_token = params.get("access_token");
+        const refresh_token = params.get("refresh_token");
+        const hashError = params.get("error_description");
+
+        if (hashError) {
+          setError(hashError);
+          setChecking(false);
+          return;
+        }
+
+        if (access_token && refresh_token) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token,
+            refresh_token,
+          });
+          // Strip the tokens from the address bar so they don't linger in
+          // history or get copied out of the URL.
+          window.history.replaceState(null, "", window.location.pathname);
+          if (sessionError) {
+            setError(sessionError.message);
+            setChecking(false);
+            return;
+          }
+        }
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
         setError(
           "This reset link is invalid or has expired. Request a new one."
         );
       }
       setChecking(false);
-    });
+    };
+
+    void init();
   }, [supabase]);
 
   const handleSubmit = async (e: React.FormEvent) => {
