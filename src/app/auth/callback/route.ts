@@ -10,8 +10,15 @@ import { createClient } from '@/lib/supabase/server'
 // silently impossible. `forgot-password/page.tsx` has always pointed at this
 // path; it just didn't exist.
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
+  const { searchParams, origin: requestOrigin } = new URL(request.url)
   const code = searchParams.get('code')
+
+  // Behind a reverse proxy (Hostinger, most managed Node hosts) `request.url`
+  // carries the container's internal bind address — redirecting to it sends
+  // the user to a dead https://0.0.0.0:3000. Prefer the configured public
+  // origin. NEXT_PUBLIC_SITE_URL is trusted config, not a request header, so
+  // this can't be poisoned by a spoofed Host.
+  const origin = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, '') || requestOrigin
 
   // Only allow same-origin relative paths — an attacker-supplied absolute URL
   // here would turn the login flow into an open redirect.
