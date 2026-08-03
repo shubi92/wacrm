@@ -39,6 +39,20 @@ export async function middleware(request: NextRequest) {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
       response.cookies.set(cookie)
     })
+    return markPrivate(response)
+  }
+
+  // Every response from this middleware depends on the caller's auth cookies,
+  // so none of them may be cached by a shared cache. Some managed hosts put a
+  // CDN in front of the app that applies `public, s-maxage=...` by default and
+  // varies only on Accept-Encoding — which means the "not signed in, go to
+  // /login" redirect gets cached and then replayed to users who ARE signed in.
+  // The symptom is a login that silently bounces straight back to /login.
+  // Declaring these responses private (and varying on Cookie) keeps any
+  // intermediary from serving one user's auth outcome to another.
+  function markPrivate<T extends NextResponse>(response: T): T {
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0')
+    response.headers.set('Vary', 'Cookie, Accept-Encoding')
     return response
   }
 
@@ -85,7 +99,11 @@ export async function middleware(request: NextRequest) {
     )
   }
 
-  return supabaseResponse
+  // Not just the redirect branches: a rendered page for a signed-in user is
+  // itself auth-dependent, so a shared cache must never hand it to anyone
+  // else. Static assets are excluded by the matcher below and still cache
+  // normally.
+  return markPrivate(supabaseResponse)
 }
 
 export const config = {
