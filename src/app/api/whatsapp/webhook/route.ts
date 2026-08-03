@@ -839,6 +839,10 @@ async function processMessage(
     // stable identifier — `text` is the visible label, which an operator can
     // edit at any time, so routing on it alone is fragile.
     interactive_reply_id: interactiveReplyId,
+    // The sender's WhatsApp number, as Meta gives it (E.164 digits, no '+').
+    // Consumers that key their own records on phone number would otherwise
+    // have to call back for the contact just to learn who replied.
+    from: message.from,
   })
 }
 
