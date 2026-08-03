@@ -57,6 +57,13 @@ interface WhatsAppMessage {
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
   }
+  /**
+   * Set when the customer taps a QUICK_REPLY button on a *template* we sent.
+   * Distinct from `interactive` above: template taps arrive as type 'button'
+   * with this flat shape, not as `interactive.button_reply`. `text` is the
+   * visible label, `payload` the value registered with the template.
+   */
+  button?: { text?: string; payload?: string }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -653,7 +660,12 @@ async function processMessage(
     ? message.type
     : message.type === 'sticker'
       ? 'image'   // stickers are images
-      : 'text'    // reaction, unknown → text fallback
+      : message.type === 'button'
+        ? 'interactive' // template quick-reply tap — same semantics as an
+                        // interactive button_reply, and it carries an
+                        // interactive_reply_id, so reuse that CHECK value
+                        // rather than widening the constraint.
+        : 'text'    // reaction, unknown → text fallback
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -823,10 +835,16 @@ async function processMessage(
     whatsapp_message_id: message.id,
     content_type: contentType,
     text: contentText,
+    // Only set for button/list taps. Consumers scoring a survey reply need a
+    // stable identifier — `text` is the visible label, which an operator can
+    // edit at any time, so routing on it alone is fragile.
+    interactive_reply_id: interactiveReplyId,
   })
 }
 
-async function parseMessageContent(
+// Exported for unit tests. Not part of the route's public contract —
+// the handler is the only production caller.
+export async function parseMessageContent(
   message: WhatsAppMessage,
   accessToken: string
 ): Promise<{
@@ -961,6 +979,26 @@ async function parseMessageContent(
         }
       }
       return { ...empty, contentText: '[Interactive reply]' }
+    }
+
+    case 'button': {
+      // A QUICK_REPLY tap on a *template* — a different payload shape from
+      // 'interactive' above, and the one every template-driven survey uses.
+      // Without this case the tap fell through to `default:` and the label
+      // was replaced by "[Unsupported message type: button]", destroying the
+      // only signal a consumer has to score the reply.
+      const label = message.button?.text ?? message.button?.payload
+      if (label) {
+        return {
+          ...empty,
+          contentText: label,
+          // Prefer the payload as the stable id — labels are editable, and a
+          // template's payload is what was registered with Meta. Fall back to
+          // the label so the field is never empty for a genuine tap.
+          interactiveReplyId: message.button?.payload ?? label,
+        }
+      }
+      return { ...empty, contentText: '[Button reply]' }
     }
 
     default:
