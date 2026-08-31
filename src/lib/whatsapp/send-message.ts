@@ -42,6 +42,10 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
+import {
+  renderTemplateBody,
+  type SendTimeParams,
+} from '@/lib/whatsapp/template-send-builder';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 
@@ -310,15 +314,29 @@ export async function sendMessageToConversation(
 
   // Template row (for header + button components). isMessageTemplate
   // guards against a malformed local row crashing the send-builder.
+  //
+  // Language match is exact-first, then base-language: an external
+  // caller sends `"en"` while sync stored Meta's `"en_US"` (or vice
+  // versa), and a miss here isn't cosmetic — it drops the header and
+  // button components from the send and leaves the persisted body
+  // blank.
   let templateRow: MessageTemplate | null = null;
   if (messageType === 'template' && templateName) {
-    const { data } = await db
+    const { data: rows } = await db
       .from('message_templates')
       .select('*')
       .eq('account_id', accountId)
-      .eq('name', templateName)
-      .eq('language', templateLanguage || 'en_US')
-      .maybeSingle();
+      .eq('name', templateName);
+
+    const wanted = templateLanguage || 'en_US';
+    const base = wanted.split('_')[0];
+    const data =
+      rows?.find((r: { language?: string }) => r.language === wanted) ??
+      rows?.find(
+        (r: { language?: string }) => (r.language ?? '').split('_')[0] === base
+      ) ??
+      null;
+
     if (data && !isMessageTemplate(data)) {
       throw new SendMessageError(
         'template_malformed',
@@ -448,13 +466,30 @@ export async function sendMessageToConversation(
   const interactiveBody =
     messageType === 'interactive' ? interactivePayload!.body : null;
 
+  // Template sends: the dashboard renders the filled-in body client-side
+  // and passes it as contentText, but an API caller only sends the params
+  // — so render it here too. Without this the row lands with a null body
+  // and the thread draws an empty bubble (issue: AlSafrrat's sends showed
+  // as blank purple bubbles previewed as "[template]").
+  const templateBody =
+    messageType === 'template' && !contentText && templateRow?.body_text
+      ? renderTemplateBody(
+          templateRow.body_text,
+          (templateMessageParams as SendTimeParams | undefined)?.body ??
+            templateParams ??
+            []
+        )
+      : null;
+
+  const persistedText = interactiveBody ?? contentText ?? templateBody ?? null;
+
   const { data: messageRecord, error: msgError } = await db
     .from('messages')
     .insert({
       conversation_id: conversationId,
       sender_type: 'agent',
       content_type: messageType,
-      content_text: interactiveBody ?? contentText ?? null,
+      content_text: persistedText,
       media_url: mediaUrl || null,
       template_name: templateName || null,
       interactive_payload:
@@ -478,7 +513,7 @@ export async function sendMessageToConversation(
   const lastMessageText =
     messageType === 'interactive'
       ? interactivePayloadPreviewText(interactivePayload!)
-      : contentText || `[${messageType}]`;
+      : persistedText || `[${messageType}]`;
 
   await db
     .from('conversations')

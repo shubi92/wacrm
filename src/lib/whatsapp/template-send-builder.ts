@@ -69,6 +69,22 @@ type MetaSendParameter =
   | { type: 'coupon_code'; coupon_code: string }
   | { type: 'payload'; payload: string };
 
+/**
+ * Substitute {{1}}, {{2}}, … in a template body with send-time values.
+ *
+ * This is what the message *reads* as once Meta renders it, so it's
+ * what we persist as `messages.content_text` — otherwise the thread
+ * shows an empty bubble and the conversation list shows `[template]`.
+ * An unfilled index is left as its literal `{{n}}` rather than blanked,
+ * so a missing param is visible instead of silently swallowed.
+ */
+export function renderTemplateBody(body: string, params: string[]): string {
+  return body.replace(/\{\{(\d+)\}\}/g, (_, raw) => {
+    const idx = Number(raw) - 1;
+    return params[idx] ?? `{{${raw}}}`;
+  });
+}
+
 function buildHeaderComponent(
   template: MessageTemplate,
   params: SendTimeParams,
