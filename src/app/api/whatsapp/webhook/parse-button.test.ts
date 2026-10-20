@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 // ---------------------------------------------------------------------------
 // Meta delivers a QUICK_REPLY tap on a *template* as `type: "button"` with a
@@ -12,12 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 // label, and the rating was lost with no error raised anywhere.
 // ---------------------------------------------------------------------------
 
-// The module pulls in Supabase clients at import time; none of them are
-// exercised by parseMessageContent for non-media types.
-vi.mock('@/lib/supabase/admin', () => ({ supabaseAdmin: () => ({}) }))
-vi.mock('@/lib/supabase/server', () => ({ createClient: async () => ({}) }))
-
-const { parseMessageContent } = await import('./route')
+const { parseMessageContent } = await import('./parse-message')
 
 const base = { id: 'wamid.TEST', from: '966500000000', timestamp: '1700000000' }
 
