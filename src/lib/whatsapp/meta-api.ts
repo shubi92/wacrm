@@ -407,14 +407,29 @@ export async function sendTemplateMessage(
     if (components.length > 0) {
       templatePayload.components = components
     }
-  } else if (params && params.length > 0) {
-    // Legacy body-only path — no template row available.
-    templatePayload.components = [
-      {
+  } else {
+    // No template row (not yet synced from Meta). Still honour the
+    // structured `messageParams` — dropping them sent Meta zero values
+    // and every send failed with #132000. Without the row we can't know
+    // button types, so buttonParams are sent as URL-button suffixes
+    // (the only send-time button value callers pass today).
+    const bodyValues = messageParams?.body ?? params ?? []
+    const components: Record<string, unknown>[] = []
+    if (bodyValues.length > 0) {
+      components.push({
         type: 'body',
-        parameters: params.map((p) => ({ type: 'text', text: String(p) })),
-      },
-    ]
+        parameters: bodyValues.map((p) => ({ type: 'text', text: String(p) })),
+      })
+    }
+    for (const [index, value] of Object.entries(messageParams?.buttonParams ?? {})) {
+      components.push({
+        type: 'button',
+        sub_type: 'url',
+        index: String(index),
+        parameters: [{ type: 'text', text: String(value) }],
+      })
+    }
+    if (components.length > 0) templatePayload.components = components
   }
 
   const body: Record<string, unknown> = {

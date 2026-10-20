@@ -445,6 +445,32 @@ export async function sendMessageToConversation(
     const message =
       err instanceof Error ? err.message : 'Unknown Meta API error';
     console.error('[send-message] Meta send failed for all variants:', message);
+    // Record the failed attempt so the conversation shows what happened
+    // instead of looking empty. Best-effort: the send already failed,
+    // so a DB error here must not mask the Meta error.
+    const failedText = `${contentText ? `${contentText}\n\n` : ''}⚠️ Not sent — Meta API error: ${message}`;
+    const { error: failedErr } = await db.from('messages').insert({
+      conversation_id: conversationId,
+      sender_type: 'agent',
+      content_type: messageType === 'interactive' ? 'text' : messageType,
+      content_text: failedText,
+      media_url: mediaUrl || null,
+      template_name: templateName || null,
+      status: 'failed',
+      reply_to_message_id: replyToMessageId || null,
+    });
+    if (failedErr) {
+      console.error('[send-message] error recording failed message:', failedErr);
+    } else {
+      await db
+        .from('conversations')
+        .update({
+          last_message_text: failedText,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId);
+    }
     throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
   }
 

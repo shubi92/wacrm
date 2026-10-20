@@ -3,6 +3,7 @@ import {
   INTERACTIVE_LIMITS,
   sendInteractiveButtons,
   sendInteractiveList,
+  sendTemplateMessage,
 } from "./meta-api";
 
 // All assertions in this file run BEFORE the network call. We stub fetch
@@ -265,5 +266,44 @@ describe("sendInteractiveList — validation", () => {
         },
       },
     });
+  });
+});
+
+describe("sendTemplateMessage — no local template row", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // A template not yet synced from Meta has no row; the structured
+  // messageParams used to be dropped, so Meta got zero values (#132000).
+  it("still sends structured body values and URL-button suffixes", async () => {
+    let body: { template: { components?: unknown[] } } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ messages: [{ id: "wamid.OK" }] }), { status: 200 });
+      }),
+    );
+
+    await sendTemplateMessage({
+      phoneNumberId: "test-phone",
+      accessToken: "test-token",
+      to: "1234567890",
+      templateName: "still_interested_ar",
+      language: "ar",
+      params: [],
+      messageParams: { body: ["Ahmed", "Al-Safrrat", "Tank cleaning"], buttonParams: { 0: "abc123" } },
+    });
+
+    expect(body!.template.components).toEqual([
+      {
+        type: "body",
+        parameters: [
+          { type: "text", text: "Ahmed" },
+          { type: "text", text: "Al-Safrrat" },
+          { type: "text", text: "Tank cleaning" },
+        ],
+      },
+      { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: "abc123" }] },
+    ]);
   });
 });
