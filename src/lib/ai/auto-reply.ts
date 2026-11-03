@@ -10,6 +10,10 @@ import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
+/** How long a human/system outbound keeps the bot quiet on a thread —
+ *  matches WhatsApp's 24h customer-service window. */
+const HUMAN_ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000
+
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
   accountId: string
@@ -33,6 +37,7 @@ interface DispatchArgs {
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
  *   - the per-conversation reply cap is reached
+ *   - a non-AI outbound message went to this thread in the last 24h
  *   - there's nothing to reply to
  *
  * The 24h WhatsApp session window is inherently open here — we're
@@ -78,6 +83,24 @@ export async function dispatchInboundToAiReply(
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+
+    // Someone other than the bot is already talking to this customer — a
+    // teammate in the inbox, a Flow/Automation, or an external system
+    // sending through the public API (e.g. a CRM's booking messages,
+    // stored as sender_type='agent'). None of those assign an agent, so
+    // the gate above can't see them. Stand down for the session window
+    // rather than talk over them; a read error also stands down
+    // (under-reply rather than over-reply).
+    const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS).toISOString()
+    const { data: recentOutbound, error: outErr } = await db
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .in('sender_type', ['agent', 'bot'])
+      .eq('ai_generated', false)
+      .gte('created_at', since)
+      .limit(1)
+    if (outErr || (recentOutbound && recentOutbound.length > 0)) return
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return

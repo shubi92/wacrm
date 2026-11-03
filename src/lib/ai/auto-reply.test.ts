@@ -11,6 +11,9 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
+    recentOutbound: [] as { id: string }[],
+    recentOutboundError: null as { message: string } | null,
+    outboundFilters: [] as [string, string, unknown][],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
@@ -33,6 +36,27 @@ vi.mock('./admin-client', () => ({
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
+        }
+        return chain
+      }
+      if (table === 'messages') {
+        // .select().eq().in().eq().gte().limit() → recent non-AI outbound
+        const record =
+          (op: string) =>
+          (col: string, val: unknown) => {
+            h.state.outboundFilters.push([op, col, val])
+            return chain
+          }
+        const chain = {
+          select: () => chain,
+          eq: record('eq'),
+          in: record('in'),
+          gte: record('gte'),
+          limit: () =>
+            Promise.resolve({
+              data: h.state.recentOutboundError ? null : h.state.recentOutbound,
+              error: h.state.recentOutboundError,
+            }),
         }
         return chain
       }
@@ -88,6 +112,9 @@ beforeEach(() => {
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
+  h.state.recentOutbound = []
+  h.state.recentOutboundError = null
+  h.state.outboundFilters = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
@@ -174,6 +201,34 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       ai_autoreply_disabled: false,
       ai_reply_count: 3,
     }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('skips when a non-AI message went out on the thread in the last 24h', async () => {
+    h.state.recentOutbound = [{ id: 'msg-from-crm' }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('looks only at non-AI agent/bot sends on this thread within 24h', async () => {
+    const before = Date.now()
+    await dispatchInboundToAiReply(ARGS)
+    const f = h.state.outboundFilters
+    expect(f).toContainEqual(['eq', 'conversation_id', 'conv-1'])
+    expect(f).toContainEqual(['in', 'sender_type', ['agent', 'bot']])
+    expect(f).toContainEqual(['eq', 'ai_generated', false])
+    const since = f.find(([op]) => op === 'gte')?.[2] as string
+    const ageMs = before - Date.parse(since)
+    expect(ageMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000)
+    expect(ageMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000)
+    // Its own earlier replies don't block it → happy path still sends.
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('stands down when the recent-outbound lookup errors', async () => {
+    h.state.recentOutboundError = { message: 'boom' }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
