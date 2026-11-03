@@ -38,6 +38,7 @@ interface DispatchArgs {
  *   - auto-reply was disabled for this conversation (prior handoff)
  *   - the per-conversation reply cap is reached
  *   - a non-AI outbound message went to this thread in the last 24h
+ *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
  *
  * The 24h WhatsApp session window is inherently open here — we're
@@ -84,23 +85,9 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
 
-    // Someone other than the bot is already talking to this customer — a
-    // teammate in the inbox, a Flow/Automation, or an external system
-    // sending through the public API (e.g. a CRM's booking messages,
-    // stored as sender_type='agent'). None of those assign an agent, so
-    // the gate above can't see them. Stand down for the session window
-    // rather than talk over them; a read error also stands down
-    // (under-reply rather than over-reply).
-    const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS).toISOString()
-    const { data: recentOutbound, error: outErr } = await db
-      .from('messages')
-      .select('id')
-      .eq('conversation_id', conversationId)
-      .in('sender_type', ['agent', 'bot'])
-      .eq('ai_generated', false)
-      .gte('created_at', since)
-      .limit(1)
-    if (outErr || (recentOutbound && recentOutbound.length > 0)) return
+    // Someone other than the bot is already talking to this customer (see
+    // `othersActiveOnThread`). Checked again after generation, below.
+    if (await othersActiveOnThread(db, conversationId)) return
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -180,6 +167,11 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // Generation takes seconds — a teammate or the API may have replied
+    // meanwhile. Re-check right before sending. (Narrows, doesn't close,
+    // the window; strict serialization would need a conversation lock.)
+    if (await othersActiveOnThread(db, conversationId)) return
+
     // Atomically claim a reply slot: the cap check + increment happen in
     // one UPDATE, so concurrent inbounds can never overshoot the cap. If
     // another inbound just took the last slot, `claimed` is false and we
@@ -213,4 +205,31 @@ export async function dispatchInboundToAiReply(
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }
+}
+
+/**
+ * True when someone other than the bot messaged this customer within the
+ * session window — a teammate in the inbox, a Flow/Automation, or an
+ * external system sending through the public API (e.g. a CRM's booking
+ * messages, stored as sender_type='agent'). None of those assign an
+ * agent, so the `assigned_agent_id` gate can't see them. A read error
+ * also counts as active (under-reply rather than over-reply).
+ *
+ * Broadcasts don't write `messages` rows, so a reply to a recent
+ * broadcast stays eligible — deliberately: that's a fresh inquiry.
+ */
+async function othersActiveOnThread(
+  db: ReturnType<typeof supabaseAdmin>,
+  conversationId: string,
+): Promise<boolean> {
+  const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS).toISOString()
+  const { data, error } = await db
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['agent', 'bot'])
+    .eq('ai_generated', false)
+    .gte('created_at', since)
+    .limit(1)
+  return !!error || (data?.length ?? 0) > 0
 }
