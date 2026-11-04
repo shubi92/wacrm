@@ -283,6 +283,27 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       expect(h.engineSendText).not.toHaveBeenCalled()
     })
 
+    it('replies after Resume AI despite the resumer’s own earlier reply', async () => {
+      // takeover → staff reply (2h ago) → Resume AI (1h ago) → inbound now
+      h.state.conv = { ...h.state.conv, ai_resumed_at: hoursAgo(1) }
+      h.state.messageRows = [row({ created_at: hoursAgo(2) })]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.state.outboundFilters).toContainEqual(['gte', 'created_at', hoursAgo(1)])
+      expect(h.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({ aiGenerated: true }),
+      )
+    })
+
+    it.each([
+      ['a send after Resume AI', hoursAgo(1), hoursAgo(0.5)],
+      ['a recent send when Resume AI is older than 24h', hoursAgo(30), hoursAgo(2)],
+    ])('still skips on %s', async (_label, resumedAt, sentAt) => {
+      h.state.conv = { ...h.state.conv, ai_resumed_at: resumedAt }
+      h.state.messageRows = [row({ created_at: sentAt })]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.engineSendText).not.toHaveBeenCalled()
+    })
+
     it('stands down without calling the model when the lookup errors', async () => {
       h.state.recentOutboundError = { message: 'boom' }
       await dispatchInboundToAiReply(ARGS)

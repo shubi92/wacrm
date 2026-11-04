@@ -75,7 +75,7 @@ export async function dispatchInboundToAiReply(
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
@@ -87,7 +87,7 @@ export async function dispatchInboundToAiReply(
 
     // Someone other than the bot is already talking to this customer (see
     // `othersActiveOnThread`). Checked again after generation, below.
-    if (await othersActiveOnThread(db, conversationId)) return
+    if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -170,7 +170,7 @@ export async function dispatchInboundToAiReply(
     // Generation takes seconds — a teammate or the API may have replied
     // meanwhile. Re-check right before sending. (Narrows, doesn't close,
     // the window; strict serialization would need a conversation lock.)
-    if (await othersActiveOnThread(db, conversationId)) return
+    if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
 
     // Atomically claim a reply slot: the cap check + increment happen in
     // one UPDATE, so concurrent inbounds can never overshoot the cap. If
@@ -217,12 +217,20 @@ export async function dispatchInboundToAiReply(
  *
  * Broadcasts don't write `messages` rows, so a reply to a recent
  * broadcast stays eligible — deliberately: that's a fresh inquiry.
+ *
+ * The window starts no earlier than the last "Resume AI" click, so a
+ * teammate who replied and then handed the thread back isn't counted.
  */
 async function othersActiveOnThread(
   db: ReturnType<typeof supabaseAdmin>,
   conversationId: string,
+  resumedAt: string | null | undefined,
 ): Promise<boolean> {
-  const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS).toISOString()
+  const windowStart = Date.now() - HUMAN_ACTIVE_WINDOW_MS
+  const resumed = resumedAt ? Date.parse(resumedAt) : NaN
+  const since = new Date(
+    resumed > windowStart ? resumed : windowStart,
+  ).toISOString()
   const { data, error } = await db
     .from('messages')
     .select('id')

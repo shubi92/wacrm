@@ -177,10 +177,13 @@ export interface Conversation {
    *    checked against the account's per-conversation cap.
    *  - `ai_handoff_summary` — short internal note the bot wrote when it
    *    handed off, shown to whoever takes the thread over.
+   *  - `ai_resumed_at` — last "Resume AI" click; the bot ignores outbound
+   *    sent before it when deciding whether someone else is active.
    */
   ai_autoreply_disabled?: boolean;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
+  ai_resumed_at?: string | null;
 }
 
 // ============================================================
