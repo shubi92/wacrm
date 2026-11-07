@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AiConfig } from './types'
 
 // Shared, hoisted mock state so the module mocks can close over it.
@@ -11,6 +11,10 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
+    // `messages` rows; the mock applies the query's real filters to them.
+    messageRows: [] as Record<string, unknown>[],
+    recentOutboundError: null as { message: string } | null,
+    outboundFilters: [] as [string, string, unknown][],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
@@ -33,6 +37,42 @@ vi.mock('./admin-client', () => ({
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
+        }
+        return chain
+      }
+      if (table === 'messages') {
+        // .select().eq().in().eq().gte().limit() → recent non-AI outbound.
+        // Filters are applied to `messageRows`, so a wrong column or value
+        // in the query changes the result instead of passing silently.
+        const filters: [string, string, unknown][] = []
+        const record =
+          (op: string) =>
+          (col: string, val: unknown) => {
+            filters.push([op, col, val])
+            h.state.outboundFilters.push([op, col, val])
+            return chain
+          }
+        const matches = (row: Record<string, unknown>) =>
+          filters.every(([op, col, val]) => {
+            if (!(col in row)) return false // unknown column never matches
+            if (op === 'eq') return row[col] === val
+            if (op === 'in') return (val as unknown[]).includes(row[col])
+            return String(row[col]) >= String(val) // gte on ISO timestamps
+          })
+        const chain = {
+          select: () => chain,
+          eq: record('eq'),
+          in: record('in'),
+          gte: record('gte'),
+          limit: (n: number) =>
+            Promise.resolve(
+              h.state.recentOutboundError
+                ? { data: null, error: h.state.recentOutboundError }
+                : {
+                    data: h.state.messageRows.filter(matches).slice(0, n),
+                    error: null,
+                  },
+            ),
         }
         return chain
       }
@@ -88,6 +128,9 @@ beforeEach(() => {
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
+  h.state.messageRows = []
+  h.state.recentOutboundError = null
+  h.state.outboundFilters = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
@@ -176,6 +219,97 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  describe('others already active on the thread', () => {
+    const NOW = Date.parse('2026-11-03T12:00:00.000Z')
+    const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+    const row = (overrides: Record<string, unknown>) => ({
+      conversation_id: 'conv-1',
+      sender_type: 'agent',
+      ai_generated: false,
+      created_at: hoursAgo(1),
+      ...overrides,
+    })
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(NOW)
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('queries exactly: this thread, agent/bot, non-AI, created_at within 24h', async () => {
+      await dispatchInboundToAiReply(ARGS)
+      const f = h.state.outboundFilters
+      expect(f).toContainEqual(['eq', 'conversation_id', 'conv-1'])
+      expect(f).toContainEqual(['in', 'sender_type', ['agent', 'bot']])
+      expect(f).toContainEqual(['eq', 'ai_generated', false])
+      expect(f).toContainEqual(['gte', 'created_at', hoursAgo(24)])
+    })
+
+    it.each([
+      ['an API/CRM or inbox agent send', row({})],
+      ['a Flow/Automation bot send', row({ sender_type: 'bot' })],
+    ])('skips after %s in the last 24h', async (_label, msg) => {
+      h.state.messageRows = [msg]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.generateReply).not.toHaveBeenCalled()
+      expect(h.engineSendText).not.toHaveBeenCalled()
+    })
+
+    it('still replies past its own AI replies, older sends, and other threads', async () => {
+      h.state.messageRows = [
+        row({ sender_type: 'bot', ai_generated: true }), // its own reply
+        row({ created_at: hoursAgo(25) }), // outside the window
+        row({ conversation_id: 'conv-2' }), // another thread
+        row({ sender_type: 'customer' }), // inbound
+      ]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-1', aiGenerated: true }),
+      )
+    })
+
+    it('does not send when someone replies while the reply is generating', async () => {
+      h.generateReply.mockImplementation(async () => {
+        h.state.messageRows.push(row({ created_at: new Date(NOW).toISOString() }))
+        return { text: 'Hello!', handoff: false }
+      })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.generateReply).toHaveBeenCalled()
+      expect(h.state.rpcCalls).toHaveLength(0) // no reply slot burned
+      expect(h.engineSendText).not.toHaveBeenCalled()
+    })
+
+    it('replies after Resume AI despite the resumer’s own earlier reply', async () => {
+      // takeover → staff reply (2h ago) → Resume AI (1h ago) → inbound now
+      h.state.conv = { ...h.state.conv, ai_resumed_at: hoursAgo(1) }
+      h.state.messageRows = [row({ created_at: hoursAgo(2) })]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.state.outboundFilters).toContainEqual(['gte', 'created_at', hoursAgo(1)])
+      expect(h.engineSendText).toHaveBeenCalledWith(
+        expect.objectContaining({ aiGenerated: true }),
+      )
+    })
+
+    it.each([
+      ['a send after Resume AI', hoursAgo(1), hoursAgo(0.5)],
+      ['a recent send when Resume AI is older than 24h', hoursAgo(30), hoursAgo(2)],
+    ])('still skips on %s', async (_label, resumedAt, sentAt) => {
+      h.state.conv = { ...h.state.conv, ai_resumed_at: resumedAt }
+      h.state.messageRows = [row({ created_at: sentAt })]
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.engineSendText).not.toHaveBeenCalled()
+    })
+
+    it('stands down without calling the model when the lookup errors', async () => {
+      h.state.recentOutboundError = { message: 'boom' }
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.generateReply).not.toHaveBeenCalled()
+      expect(h.engineSendText).not.toHaveBeenCalled()
+    })
   })
 
   it('skips when there is nothing to reply to', async () => {

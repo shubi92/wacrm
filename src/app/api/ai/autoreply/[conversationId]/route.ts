@@ -81,6 +81,9 @@ export async function POST(request: Request, { params }: Params) {
       // a human choosing to re-engage the assistant.
       update.ai_reply_count = 0
       update.ai_handoff_summary = null
+      // The bot ignores outbound sent before this moment, so the
+      // resumer's own earlier replies don't keep it muted for 24h.
+      update.ai_resumed_at = new Date().toISOString()
     }
 
     const { error: upErr } = await supabase

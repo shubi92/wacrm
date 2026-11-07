@@ -10,6 +10,10 @@ import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
+/** How long a human/system outbound keeps the bot quiet on a thread —
+ *  matches WhatsApp's 24h customer-service window. */
+const HUMAN_ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000
+
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
   accountId: string
@@ -33,6 +37,8 @@ interface DispatchArgs {
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
  *   - the per-conversation reply cap is reached
+ *   - a non-AI outbound message went to this thread in the last 24h
+ *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
  *
  * The 24h WhatsApp session window is inherently open here — we're
@@ -69,7 +75,7 @@ export async function dispatchInboundToAiReply(
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
@@ -78,6 +84,10 @@ export async function dispatchInboundToAiReply(
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+
+    // Someone other than the bot is already talking to this customer (see
+    // `othersActiveOnThread`). Checked again after generation, below.
+    if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -157,6 +167,11 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // Generation takes seconds — a teammate or the API may have replied
+    // meanwhile. Re-check right before sending. (Narrows, doesn't close,
+    // the window; strict serialization would need a conversation lock.)
+    if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
+
     // Atomically claim a reply slot: the cap check + increment happen in
     // one UPDATE, so concurrent inbounds can never overshoot the cap. If
     // another inbound just took the last slot, `claimed` is false and we
@@ -190,4 +205,39 @@ export async function dispatchInboundToAiReply(
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }
+}
+
+/**
+ * True when someone other than the bot messaged this customer within the
+ * session window — a teammate in the inbox, a Flow/Automation, or an
+ * external system sending through the public API (e.g. a CRM's booking
+ * messages, stored as sender_type='agent'). None of those assign an
+ * agent, so the `assigned_agent_id` gate can't see them. A read error
+ * also counts as active (under-reply rather than over-reply).
+ *
+ * Broadcasts don't write `messages` rows, so a reply to a recent
+ * broadcast stays eligible — deliberately: that's a fresh inquiry.
+ *
+ * The window starts no earlier than the last "Resume AI" click, so a
+ * teammate who replied and then handed the thread back isn't counted.
+ */
+async function othersActiveOnThread(
+  db: ReturnType<typeof supabaseAdmin>,
+  conversationId: string,
+  resumedAt: string | null | undefined,
+): Promise<boolean> {
+  const windowStart = Date.now() - HUMAN_ACTIVE_WINDOW_MS
+  const resumed = resumedAt ? Date.parse(resumedAt) : NaN
+  const since = new Date(
+    resumed > windowStart ? resumed : windowStart,
+  ).toISOString()
+  const { data, error } = await db
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['agent', 'bot'])
+    .eq('ai_generated', false)
+    .gte('created_at', since)
+    .limit(1)
+  return !!error || (data?.length ?? 0) > 0
 }
