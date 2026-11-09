@@ -63,6 +63,22 @@ export function parseGeneration(
   usage: AiUsage | null = null,
 ): GenerateResult {
   const handoff = raw.includes(HANDOFF_SENTINEL)
-  const text = raw.split(HANDOFF_SENTINEL).join('').trim()
+  const text = extractReply(raw).split(HANDOFF_SENTINEL).join('').trim()
   return { text, handoff, usage }
+}
+
+/**
+ * The prompt asks the model to wrap the customer-facing message in
+ * <reply>…</reply>. Models given long rule sets sometimes "think out
+ * loud" first ("Customer asks the price… per the rules…"); that must
+ * never reach a customer on WhatsApp. Keep only the last <reply> block
+ * (an unclosed one runs to the end). No tags at all → the whole output,
+ * so a model that ignores the format still works as before.
+ */
+function extractReply(raw: string): string {
+  const open = raw.lastIndexOf('<reply>')
+  if (open === -1) return raw
+  const start = open + '<reply>'.length
+  const close = raw.indexOf('</reply>', start)
+  return close === -1 ? raw.slice(start) : raw.slice(start, close)
 }

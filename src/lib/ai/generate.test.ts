@@ -60,6 +60,35 @@ describe('parseGeneration', () => {
     })
   })
 
+  it('keeps only the <reply> block, dropping reasoning written outside it', () => {
+    expect(
+      parseGeneration(
+        'Customer asks the ground-tank price; per the rules ask size first.\n\n<reply>كم طول الخزان وعرضه؟</reply>',
+      ),
+    ).toEqual({ text: 'كم طول الخزان وعرضه؟', handoff: false, usage: null })
+  })
+
+  it('uses the last <reply> block and tolerates a missing close tag', () => {
+    expect(parseGeneration('<reply>draft</reply> notes <reply>final')).toEqual({
+      text: 'final',
+      handoff: false,
+      usage: null,
+    })
+  })
+
+  it('detects a handoff inside or outside the reply tags', () => {
+    expect(parseGeneration('<reply>A colleague will call you. [[HANDOFF]]</reply>')).toEqual({
+      text: 'A colleague will call you.',
+      handoff: true,
+      usage: null,
+    })
+    expect(parseGeneration('thinking… <reply>Bye</reply>\n[[HANDOFF]]')).toEqual({
+      text: 'Bye',
+      handoff: true,
+      usage: null,
+    })
+  })
+
   it('passes usage straight through', () => {
     const usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
     expect(parseGeneration('Hi', usage)).toEqual({
