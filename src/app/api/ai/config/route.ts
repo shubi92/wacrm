@@ -11,6 +11,9 @@ import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { parseTestNumbers } from '@/lib/ai/test-numbers'
 
+const MIGRATION_038_MISSING =
+  'Test numbers need database migration 038 (ai_configs.auto_reply_test_numbers). Nothing was saved.'
+
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
 }
@@ -44,25 +47,31 @@ export async function GET() {
       )
     }
 
-    if (!data) return NextResponse.json({ configured: false })
-    // The keys are selected only to derive the has_* flags; neither is
-    // returned to the client.
-    const { api_key, embeddings_api_key, ...safe } = data
     // Read on its own so a database without migration 038 still loads the
     // rest of the config; `null` tells the form the field is unavailable.
+    // Probed even when there's no row yet, so a brand-new account can set
+    // test numbers before its first activation.
     const { data: tn, error: tnErr } = await supabase
       .from('ai_configs')
       .select('auto_reply_test_numbers')
       .eq('account_id', accountId)
       .maybeSingle()
+    const testNumbers = tnErr
+      ? null
+      : ((tn?.auto_reply_test_numbers as string[] | null) ?? [])
+
+    if (!data) {
+      return NextResponse.json({ configured: false, auto_reply_test_numbers: testNumbers })
+    }
+    // The keys are selected only to derive the has_* flags; neither is
+    // returned to the client.
+    const { api_key, embeddings_api_key, ...safe } = data
     return NextResponse.json({
       configured: true,
       has_key: !!api_key,
       has_embeddings_key: !!embeddings_api_key,
       ...safe,
-      auto_reply_test_numbers: tnErr
-        ? null
-        : ((tn?.auto_reply_test_numbers as string[] | null) ?? []),
+      auto_reply_test_numbers: testNumbers,
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -101,6 +110,20 @@ export async function POST(request: Request) {
         : null
     const isActive = body.is_active === true
     const autoReplyEnabled = body.auto_reply_enabled === true
+
+    // Validate test numbers BEFORE anything is written: an entry that
+    // can't be read must never turn into an empty list ("reply to everyone").
+    const testNumbersProvided = 'auto_reply_test_numbers' in body
+    let testNumbers: string[] = []
+    if (testNumbersProvided) {
+      const parsed = parseTestNumbers(body.auto_reply_test_numbers)
+      if (!parsed.ok) {
+        return bad(
+          `These test numbers aren't valid phone numbers: ${parsed.invalid.slice(0, 5).join(', ')}. Nothing was saved.`,
+        )
+      }
+      testNumbers = parsed.numbers
+    }
 
     let maxPer = Number(body.auto_reply_max_per_conversation)
     if (!Number.isFinite(maxPer)) maxPer = 3
@@ -220,6 +243,10 @@ export async function POST(request: Request) {
     // Only touch the handoff target when the form actually sent the field,
     // so a partial save (e.g. flipping a toggle) doesn't wipe it.
     if (handoffProvided) shared.handoff_agent_id = handoffAgentId
+    // Same write as the switches, so turning auto-reply on and restricting
+    // it to test numbers land together or not at all — never an enabled,
+    // unrestricted bot in between.
+    if (testNumbersProvided) shared.auto_reply_test_numbers = testNumbers
     if (rawEmbeddingsKey) {
       shared.embeddings_api_key = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {
@@ -233,6 +260,7 @@ export async function POST(request: Request) {
         .eq('account_id', accountId)
       if (upErr) {
         console.error('[ai/config POST] update error:', upErr)
+        if (testNumbersProvided && upErr.code === '42703') return bad(MIGRATION_038_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
@@ -247,24 +275,10 @@ export async function POST(request: Request) {
       })
       if (insErr) {
         console.error('[ai/config POST] insert error:', insErr)
+        if (testNumbersProvided && insErr.code === '42703') return bad(MIGRATION_038_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
-        )
-      }
-    }
-
-    // Test numbers are saved separately (and only when the form sent them)
-    // so the main save keeps working on a database without migration 038.
-    if ('auto_reply_test_numbers' in body) {
-      const { error: tnErr } = await supabase
-        .from('ai_configs')
-        .update({ auto_reply_test_numbers: parseTestNumbers(body.auto_reply_test_numbers) })
-        .eq('account_id', accountId)
-      if (tnErr) {
-        console.error('[ai/config POST] test numbers update error:', tnErr)
-        return bad(
-          'Settings saved, but the test numbers could not be — apply database migration 038 first.',
         )
       }
     }

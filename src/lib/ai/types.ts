@@ -62,6 +62,12 @@ export interface GenerateResult {
   handoff: boolean
   /** Provider token usage for this call, or null when unavailable. */
   usage: AiUsage | null
+  /**
+   * True when the output carried a complete <reply>…</reply> block. The
+   * auto-reply bot only sends tagged replies; anything else (no tags, or
+   * a block cut off by the token limit) may contain the model's reasoning.
+   */
+  tagged: boolean
 }
 
 /**

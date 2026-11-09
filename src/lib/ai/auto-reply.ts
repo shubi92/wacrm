@@ -126,7 +126,7 @@ export async function dispatchInboundToAiReply(
       knowledge,
     })
 
-    const { text, handoff, usage } = await generateReply({
+    const { text, handoff, usage, tagged } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -146,7 +146,16 @@ export async function dispatchInboundToAiReply(
       usage,
     })
 
-    if (handoff || !text) {
+    // Only a complete <reply> block is safe to send: untagged output (or a
+    // block cut off by the token limit) may carry the model's reasoning.
+    // Treat it like a handoff — a human answers instead — and never send it.
+    if (!tagged && text && !handoff) {
+      console.warn(
+        `[ai auto-reply] untagged model output on conversation ${conversationId} — handing off instead of sending it.`,
+      )
+    }
+
+    if (handoff || !text || !tagged) {
       // The model can't (or shouldn't) answer — stop auto-replying on
       // this thread and hand it to a human. We (a) pause the bot here
       // (sticky until re-enabled), (b) route the conversation to the
@@ -167,22 +176,30 @@ export async function dispatchInboundToAiReply(
       if (config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
-      // Guarded on `ai_autoreply_disabled = false` so that when two
-      // inbounds race to a handoff only one wins — and only the winner
-      // sends the goodbye below (no duplicate "a colleague will help").
-      const { data: won } = await db
+      // Guarded so a stale generation can't win: the thread must still be
+      // bot-owned exactly as it was when we read it — not paused (a racing
+      // handoff), not assigned to a human (someone took it over while the
+      // model was generating), and not resumed since (a newer "Resume AI").
+      // Only the winner sends the goodbye below.
+      let guarded = db
         .from('conversations')
         .update(update)
         .eq('id', conversationId)
         .eq('ai_autoreply_disabled', false)
-        .select('id')
+        .is('assigned_agent_id', null)
+      guarded = conv.ai_resumed_at
+        ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
+        : guarded.is('ai_resumed_at', null)
+      const { data: won } = await guarded.select('id')
 
       // A handoff can carry a short message for the customer ("a colleague
       // will contact you shortly"); without it they'd get silence. Sent
       // after the handoff is recorded, and skipped if a human replied while
       // the model was generating — they're already talking to the customer.
+      // Untagged output is never sent (see above).
       if (
         text &&
+        tagged &&
         (won?.length ?? 0) > 0 &&
         !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at))
       ) {
@@ -224,6 +241,18 @@ export async function dispatchInboundToAiReply(
       return
     }
     if (claimed !== true) return // lost the per-conversation cap race
+
+    // A racing inbound may have handed this thread off (and sent its
+    // goodbye), or a teammate may have taken it, after our eligibility
+    // read. Re-check ownership right before sending so an ordinary reply
+    // never follows a handoff. (Narrows the window; a strict guarantee
+    // would need the slot claim itself to check these columns.)
+    const { data: fresh } = await db
+      .from('conversations')
+      .select('assigned_agent_id, ai_autoreply_disabled')
+      .eq('id', conversationId)
+      .maybeSingle()
+    if (!fresh || fresh.ai_autoreply_disabled || fresh.assigned_agent_id) return
 
     await engineSendText({
       accountId,

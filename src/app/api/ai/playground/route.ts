@@ -84,8 +84,10 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff } = await generateReply({ config, systemPrompt, messages })
-    return NextResponse.json({ reply: text, handoff })
+    const { text, handoff, tagged } = await generateReply({ config, systemPrompt, messages })
+    // Mirror the live bot: untagged output is never sent to a customer —
+    // it hands off instead — so show it as a handoff here too.
+    return NextResponse.json({ reply: text, handoff: handoff || !tagged, untagged: !tagged })
   } catch (err) {
     if (err instanceof AiError) {
       return NextResponse.json(
