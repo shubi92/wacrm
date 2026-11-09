@@ -1658,6 +1658,8 @@
       "handoffTo": "Hand off to",
       "handoffToDesc": "When the bot can’t help — or hits the reply cap — it pauses and routes the chat here, with a short note on what happened.",
       "handoffQueue": "Unassigned queue (any agent can pick it up)",
+      "testNumbers": "Test numbers only (optional)",
+      "testNumbersDesc": "While you try the bot out, list phone numbers here, one per line. Auto-reply then answers only these numbers; everyone else is left to your team. Leave empty to let the bot reply to everyone.",
       "remove": "Remove",
       "save": "Save",
       "missingModel": "Enter a model name.",

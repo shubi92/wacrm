@@ -9,6 +9,7 @@ import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
+import { parseTestNumbers } from '@/lib/ai/test-numbers'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -47,11 +48,21 @@ export async function GET() {
     // The keys are selected only to derive the has_* flags; neither is
     // returned to the client.
     const { api_key, embeddings_api_key, ...safe } = data
+    // Read on its own so a database without migration 038 still loads the
+    // rest of the config; `null` tells the form the field is unavailable.
+    const { data: tn, error: tnErr } = await supabase
+      .from('ai_configs')
+      .select('auto_reply_test_numbers')
+      .eq('account_id', accountId)
+      .maybeSingle()
     return NextResponse.json({
       configured: true,
       has_key: !!api_key,
       has_embeddings_key: !!embeddings_api_key,
       ...safe,
+      auto_reply_test_numbers: tnErr
+        ? null
+        : ((tn?.auto_reply_test_numbers as string[] | null) ?? []),
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -239,6 +250,21 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
+        )
+      }
+    }
+
+    // Test numbers are saved separately (and only when the form sent them)
+    // so the main save keeps working on a database without migration 038.
+    if ('auto_reply_test_numbers' in body) {
+      const { error: tnErr } = await supabase
+        .from('ai_configs')
+        .update({ auto_reply_test_numbers: parseTestNumbers(body.auto_reply_test_numbers) })
+        .eq('account_id', accountId)
+      if (tnErr) {
+        console.error('[ai/config POST] test numbers update error:', tnErr)
+        return bad(
+          'Settings saved, but the test numbers could not be — apply database migration 038 first.',
         )
       }
     }

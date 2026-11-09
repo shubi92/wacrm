@@ -9,6 +9,7 @@ import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { isTestNumberAllowed } from './test-numbers'
 
 /** How long a human/system outbound keeps the bot quiet on a thread —
  *  matches WhatsApp's 24h customer-service window. */
@@ -34,6 +35,7 @@ interface DispatchArgs {
  *
  * Eligibility gates (any → silent no-op):
  *   - AI off / auto-reply disabled for the account
+ *   - the account set test numbers and this contact isn't one of them
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
  *   - the per-conversation reply cap is reached
@@ -55,6 +57,8 @@ export async function dispatchInboundToAiReply(
 
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
+
+    if (!(await contactPassesTestNumbers(db, accountId, contactId))) return
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level
@@ -267,4 +271,37 @@ async function othersActiveOnThread(
     .gte('created_at', since)
     .limit(1)
   return !!error || (data?.length ?? 0) > 0
+}
+
+/**
+ * While an account trials the bot, `ai_configs.auto_reply_test_numbers`
+ * limits it to those phones; empty/NULL means everyone. Read separately
+ * from `loadAiConfig` so the rest of AI keeps working on a database that
+ * hasn't run migration 038 yet — but a failed read fails CLOSED (no
+ * reply): an admin who set test numbers must never see the bot answer
+ * real customers because a lookup errored.
+ */
+async function contactPassesTestNumbers(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  contactId: string,
+): Promise<boolean> {
+  const { data: cfg, error } = await db
+    .from('ai_configs')
+    .select('auto_reply_test_numbers')
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (error) {
+    console.error('[ai auto-reply] test-numbers lookup failed (migration 038 applied?):', error)
+    return false
+  }
+  const testNumbers = (cfg?.auto_reply_test_numbers as string[] | null) ?? []
+  if (testNumbers.length === 0) return true
+
+  const { data: contact } = await db
+    .from('contacts')
+    .select('phone')
+    .eq('id', contactId)
+    .maybeSingle()
+  return isTestNumberAllowed(contact?.phone as string | undefined, testNumbers)
 }
