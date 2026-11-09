@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/hooks/use-auth";
+import { botAnswersContact } from "@/lib/ai/test-numbers";
 
 // ------------------------------------------------------------
 // Account AI status is the same for every conversation, so cache it per
@@ -20,6 +21,8 @@ import { useAuth } from "@/hooks/use-auth";
 // ------------------------------------------------------------
 interface AiAccountStatus {
   autoReplyOn: boolean;
+  /** `ai_configs.auto_reply_test_numbers`; null = unreadable (bot fails closed). */
+  testNumbers: string[] | null;
 }
 const statusCache = new Map<string, AiAccountStatus>();
 
@@ -28,22 +31,28 @@ async function fetchAiAccountStatus(accountId: string): Promise<AiAccountStatus>
   if (cached) return cached;
   try {
     const res = await fetch("/api/ai/config", { cache: "no-store" });
-    if (!res.ok) return { autoReplyOn: false }; // don't cache a transient failure
+    if (!res.ok) return { autoReplyOn: false, testNumbers: null }; // don't cache a transient failure
     const j = await res.json();
     const status = {
       // AI auto-reply is "live" only when configured, the master switch
       // is on, and the inbound bot is enabled.
       autoReplyOn: !!(j?.configured && j?.is_active && j?.auto_reply_enabled),
+      testNumbers: Array.isArray(j?.auto_reply_test_numbers)
+        ? (j.auto_reply_test_numbers as string[])
+        : null,
     };
     statusCache.set(accountId, status);
     return status;
   } catch {
-    return { autoReplyOn: false }; // don't cache
+    return { autoReplyOn: false, testNumbers: null }; // don't cache
   }
 }
 
 interface AiThreadBannerProps {
   conversationId: string;
+  /** Contact phone — while the bot is limited to test numbers, threads
+   *  with anyone else get no banner (the bot never answers them). */
+  contactPhone?: string | null;
   /** `conversations.ai_autoreply_disabled` — bot paused on this thread. */
   disabled: boolean;
   /** `conversations.ai_handoff_summary` — note the bot left on handoff. */
@@ -72,6 +81,7 @@ interface AiThreadBannerProps {
  */
 export function AiThreadBanner({
   conversationId,
+  contactPhone,
   disabled,
   handoffSummary,
   assignedAgentId,
@@ -80,7 +90,7 @@ export function AiThreadBanner({
 }: AiThreadBannerProps) {
   const t = useTranslations("Inbox.aiBanner");
   const { accountId } = useAuth();
-  const [autoReplyOn, setAutoReplyOn] = useState<boolean | null>(null);
+  const [status, setStatus] = useState<AiAccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   // Optimistic local mirror of the pause flag so the banner flips
   // instantly on click; re-seeds whenever the thread (or its server
@@ -91,7 +101,7 @@ export function AiThreadBanner({
   useEffect(() => {
     if (!accountId) return;
     let alive = true;
-    fetchAiAccountStatus(accountId).then((s) => alive && setAutoReplyOn(s.autoReplyOn));
+    fetchAiAccountStatus(accountId).then((s) => alive && setStatus(s));
     return () => {
       alive = false;
     };
@@ -134,8 +144,11 @@ export function AiThreadBanner({
     [conversationId, currentUserId, onChange, t],
   );
 
-  // Account has no auto-reply → nothing to show. (Still loading → nothing.)
-  if (!autoReplyOn) return null;
+  // Account has no auto-reply, or the bot is limited to test numbers and
+  // this contact isn't one → nothing to show. (Still loading → nothing.)
+  if (!status?.autoReplyOn || !botAnswersContact(contactPhone, status.testNumbers)) {
+    return null;
+  }
 
   // Paused here (a human took over, or the model handed off).
   if (paused) {

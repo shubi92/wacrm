@@ -1132,6 +1132,7 @@ export function MessageThread({
           auto-reply configured. */}
       <AiThreadBanner
         conversationId={conversation.id}
+        contactPhone={contact?.phone}
         disabled={conversation.ai_autoreply_disabled ?? false}
         handoffSummary={conversation.ai_handoff_summary}
         assignedAgentId={assignedAgentId}

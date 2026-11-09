@@ -41,3 +41,15 @@ export function isTestNumberAllowed(
   const n = normalizePhone(phone)
   return testNumbers.some((t) => normalizePhone(t) === n)
 }
+
+/**
+ * Will the auto-reply bot answer this contact? `null` test numbers means
+ * the list couldn't be read (migration 038 missing / lookup failed); the
+ * bot fails closed in that case, so this does too.
+ */
+export function botAnswersContact(
+  phone: string | null | undefined,
+  testNumbers: string[] | null,
+): boolean {
+  return testNumbers !== null && isTestNumberAllowed(phone, testNumbers)
+}
