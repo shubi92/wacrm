@@ -20,6 +20,9 @@ const h = vi.hoisted(() => ({
     updateFilters: [] as [string, unknown][],
     handoffWon: true as boolean,
     rpcCalls: [] as { name: string; args: unknown }[],
+    testNumbers: null as string[] | null,
+    testNumbersError: null as { message: string } | null,
+    contactPhone: '966500000000' as string | null,
   },
 }))
 
@@ -31,6 +34,21 @@ vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
+      if (table === 'ai_configs' || table === 'contacts') {
+        // .select().eq().maybeSingle() → test numbers / the contact's phone
+        const row =
+          table === 'ai_configs'
+            ? { auto_reply_test_numbers: h.state.testNumbers }
+            : { phone: h.state.contactPhone }
+        const error = table === 'ai_configs' ? h.state.testNumbersError : null
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve(error ? { data: null, error } : { data: row, error: null }),
+        }
+        return chain
+      }
       if (table === 'automations') {
         // .select().eq().eq().in().limit() → active auto-responders
         const chain = {
@@ -151,6 +169,9 @@ beforeEach(() => {
   h.state.updateFilters = []
   h.state.handoffWon = true
   h.state.rpcCalls = []
+  h.state.testNumbers = null
+  h.state.testNumbersError = null
+  h.state.contactPhone = '966500000000'
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -399,6 +420,35 @@ describe('dispatchInboundToAiReply — handoff', () => {
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — test numbers', () => {
+  it('replies to everyone when no test numbers are set', async () => {
+    h.state.testNumbers = []
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+  })
+
+  it('replies to a listed test number, whatever format it was typed in', async () => {
+    h.state.testNumbers = ['966500000000']
+    h.state.contactPhone = '+966 50 000 0000'
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays silent for a number that is not on the test list', async () => {
+    h.state.testNumbers = ['966511111111']
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the test-numbers lookup errors (migration missing)', async () => {
+    h.state.testNumbersError = { message: 'column does not exist' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 })

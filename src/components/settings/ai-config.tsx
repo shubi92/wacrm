@@ -75,6 +75,10 @@ export function AiConfig() {
   // Empty string = leave unassigned (shared queue).
   const [handoffAgentId, setHandoffAgentId] = useState('');
   const [members, setMembers] = useState<AccountMember[]>([]);
+  // One phone per line. Empty = the bot replies to everyone. `null` from
+  // the API means the database lacks migration 038, so the field is hidden.
+  const [testNumbers, setTestNumbers] = useState('');
+  const [testNumbersAvailable, setTestNumbersAvailable] = useState(false);
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -100,6 +104,12 @@ export function AiConfig() {
         setAutoReplyEnabled(data.auto_reply_enabled);
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
         setHandoffAgentId(data.handoff_agent_id ?? '');
+        setTestNumbersAvailable(Array.isArray(data.auto_reply_test_numbers));
+        setTestNumbers(
+          Array.isArray(data.auto_reply_test_numbers)
+            ? data.auto_reply_test_numbers.join('\n')
+            : '',
+        );
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);
@@ -151,6 +161,8 @@ export function AiConfig() {
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_max_per_conversation: maxPerConversation,
     handoff_agent_id: handoffAgentId || null,
+    // Omitted when the database can't store it, so the save still succeeds.
+    ...(testNumbersAvailable ? { auto_reply_test_numbers: testNumbers } : {}),
   });
 
   const handleTest = async () => {
@@ -455,6 +467,24 @@ export function AiConfig() {
                 className="w-20"
               />
             </div>
+
+            {testNumbersAvailable && (
+              <div className="space-y-2">
+                <Label htmlFor="ai-test-numbers">{t('testNumbers')}</Label>
+                <p className="text-xs text-muted-foreground">
+                  {t('testNumbersDesc')}
+                </p>
+                <Textarea
+                  id="ai-test-numbers"
+                  dir="ltr"
+                  rows={3}
+                  placeholder="0501234567"
+                  value={testNumbers}
+                  onChange={(e) => setTestNumbers(e.target.value)}
+                  disabled={disabled}
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="ai-handoff">{t('handoffTo')}</Label>
