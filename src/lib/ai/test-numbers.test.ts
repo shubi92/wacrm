@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizePhone, parseTestNumbers, isTestNumberAllowed } from './test-numbers'
+import { normalizePhone, parseTestNumbers, isTestNumberAllowed, botAnswersContact } from './test-numbers'
 
 describe('normalizePhone', () => {
   it('treats local, +966 and 00966 Saudi forms as the same number', () => {
@@ -40,5 +40,18 @@ describe('isTestNumberAllowed', () => {
     expect(isTestNumberAllowed('0501234567', list)).toBe(true)
     expect(isTestNumberAllowed('966559876543', list)).toBe(false)
     expect(isTestNumberAllowed(null, list)).toBe(false)
+  })
+})
+
+describe('botAnswersContact', () => {
+  it('answers everyone when no test numbers are set', () => {
+    expect(botAnswersContact('966532080832', [])).toBe(true)
+  })
+  it('skips contacts outside the test list', () => {
+    expect(botAnswersContact('966532080832', ['966500244586'])).toBe(false)
+    expect(botAnswersContact('966500244586', ['0500244586'])).toBe(true)
+  })
+  it('fails closed when the list is unreadable', () => {
+    expect(botAnswersContact('966500244586', null)).toBe(false)
   })
 })

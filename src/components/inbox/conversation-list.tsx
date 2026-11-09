@@ -98,7 +98,10 @@ export function ConversationList({
       const { data, error } = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+        // Threads with no message yet (last_message_at NULL) sort last.
+        // Postgres puts NULLs first on DESC, which pinned empty threads
+        // (e.g. failed API sends) above every real conversation.
+        .order("last_message_at", { ascending: false, nullsFirst: false });
 
       if (cancelled) return;
 
