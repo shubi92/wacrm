@@ -85,9 +85,17 @@ export async function POST(request: Request) {
     })
 
     const { text, handoff, tagged } = await generateReply({ config, systemPrompt, messages })
-    // Mirror the live bot: untagged output is never sent to a customer —
-    // it hands off instead — so show it as a handoff here too.
-    return NextResponse.json({ reply: text, handoff: handoff || !tagged, untagged: !tagged })
+    // Same disposition as the live bot (auto-reply.ts): only a complete
+    // <reply> block is ever sent, and empty/untagged output hands off. The
+    // customer-facing `reply` is what a real customer would receive, so it
+    // stays empty for untagged output — that text never enters the
+    // Playground's conversation history either.
+    const wouldSend = tagged ? text : ''
+    return NextResponse.json({
+      reply: wouldSend,
+      handoff: handoff || !text || !tagged,
+      untagged: !tagged,
+    })
   } catch (err) {
     if (err instanceof AiError) {
       return NextResponse.json(

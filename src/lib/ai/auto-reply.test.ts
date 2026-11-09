@@ -450,6 +450,26 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updateFilters).toContainEqual(['ai_resumed_at', '2026-11-09T10:00:00.000Z'])
   })
 
+  it('drops an ordinary reply when the thread was paused and resumed during generation', async () => {
+    h.generateReply.mockImplementation(async () => {
+      h.state.conv = { ...h.state.conv, ai_resumed_at: new Date().toISOString() }
+      return { text: 'Hello!', handoff: false, tagged: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.rpcCalls).toHaveLength(0) // no fresh slot consumed
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does not send when the contact phone changed to an unlisted number during generation', async () => {
+    h.state.testNumbers = ['966500000000']
+    h.generateReply.mockImplementation(async () => {
+      h.state.contactPhone = '966511111111'
+      return { text: 'Hello!', handoff: false, tagged: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
   it('does not send an ordinary reply when the thread was handed off during generation', async () => {
     h.generateReply.mockImplementation(async () => {
       // A racing inbound paused the thread after our eligibility read.
