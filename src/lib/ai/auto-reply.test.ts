@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
     outboundFilters: [] as [string, string, unknown][],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
+    updateFilters: [] as [string, unknown][],
+    handoffWon: true as boolean,
     rpcCalls: [] as { name: string; args: unknown }[],
   },
 }))
@@ -84,9 +86,22 @@ vi.mock('./admin-client', () => ({
               Promise.resolve({ data: h.state.conv, error: null }),
           }),
         }),
+        // .update().eq('id').eq('ai_autoreply_disabled', false).select() —
+        // `handoffWon` decides whether the guarded update matched a row.
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
-          return { eq: () => Promise.resolve({ error: null }) }
+          const chain = {
+            eq: (col: string, val: unknown) => {
+              h.state.updateFilters.push([col, val])
+              return chain
+            },
+            select: () =>
+              Promise.resolve({
+                data: h.state.handoffWon ? [{ id: 'conv-1' }] : [],
+                error: null,
+              }),
+          }
+          return chain
         },
       }
     },
@@ -133,6 +148,8 @@ beforeEach(() => {
   h.state.outboundFilters = []
   h.state.claim = true
   h.state.updatePayload = null
+  h.state.updateFilters = []
+  h.state.handoffWon = true
   h.state.rpcCalls = []
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
@@ -342,5 +359,46 @@ describe('dispatchInboundToAiReply — handoff', () => {
       ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
+  })
+
+  it('sends the handoff message to the customer, then stays handed off', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'A colleague will contact you shortly.',
+      handoff: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updateFilters).toContainEqual(['ai_autoreply_disabled', false])
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'A colleague will contact you shortly.',
+        aiGenerated: true,
+      }),
+    )
+    // A goodbye is not a regular reply: no slot is claimed.
+    expect(h.state.rpcCalls).toHaveLength(0)
+  })
+
+  it('does not send the handoff message when a concurrent handoff already won', async () => {
+    h.state.handoffWon = false
+    h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does not send the handoff message when a human replied during generation', async () => {
+    h.generateReply.mockImplementation(async () => {
+      h.state.messageRows.push({
+        conversation_id: 'conv-1',
+        sender_type: 'agent',
+        ai_generated: false,
+        created_at: new Date().toISOString(),
+      })
+      return { text: 'A colleague will help.', handoff: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.engineSendText).not.toHaveBeenCalled()
   })
 })

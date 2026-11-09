@@ -163,7 +163,34 @@ export async function dispatchInboundToAiReply(
       if (config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
-      await db.from('conversations').update(update).eq('id', conversationId)
+      // Guarded on `ai_autoreply_disabled = false` so that when two
+      // inbounds race to a handoff only one wins — and only the winner
+      // sends the goodbye below (no duplicate "a colleague will help").
+      const { data: won } = await db
+        .from('conversations')
+        .update(update)
+        .eq('id', conversationId)
+        .eq('ai_autoreply_disabled', false)
+        .select('id')
+
+      // A handoff can carry a short message for the customer ("a colleague
+      // will contact you shortly"); without it they'd get silence. Sent
+      // after the handoff is recorded, and skipped if a human replied while
+      // the model was generating — they're already talking to the customer.
+      if (
+        text &&
+        (won?.length ?? 0) > 0 &&
+        !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at))
+      ) {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text,
+          aiGenerated: true,
+        })
+      }
       return
     }
 
