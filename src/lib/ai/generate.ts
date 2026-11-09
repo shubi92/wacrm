@@ -62,23 +62,35 @@ export function parseGeneration(
   raw: string,
   usage: AiUsage | null = null,
 ): GenerateResult {
-  const handoff = raw.includes(HANDOFF_SENTINEL)
-  const text = extractReply(raw).split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, usage }
+  const { body, tail, tagged } = extractReply(raw)
+  // With tags, only the reply itself or what follows it counts as a
+  // handoff request. Reasoning before the tags can mention the marker
+  // ("no need to emit [[HANDOFF]]") without meaning it.
+  const handoff = tagged
+    ? body.includes(HANDOFF_SENTINEL) || tail.includes(HANDOFF_SENTINEL)
+    : raw.includes(HANDOFF_SENTINEL)
+  const text = body.split(HANDOFF_SENTINEL).join('').trim()
+  return { text, handoff, usage, tagged }
 }
 
 /**
  * The prompt asks the model to wrap the customer-facing message in
  * <reply>…</reply>. Models given long rule sets sometimes "think out
  * loud" first ("Customer asks the price… per the rules…"); that must
- * never reach a customer on WhatsApp. Keep only the last <reply> block
- * (an unclosed one runs to the end). No tags at all → the whole output,
- * so a model that ignores the format still works as before.
+ * never reach a customer on WhatsApp. Keep only the last <reply> block.
+ * `tagged` is true only for a complete block; no tags (or a block the
+ * token limit cut off) returns the best-effort text with tagged=false,
+ * which drafts may still show but the auto-reply bot will not send.
  */
-function extractReply(raw: string): string {
+function extractReply(raw: string): { body: string; tail: string; tagged: boolean } {
   const open = raw.lastIndexOf('<reply>')
-  if (open === -1) return raw
+  if (open === -1) return { body: raw, tail: '', tagged: false }
   const start = open + '<reply>'.length
   const close = raw.indexOf('</reply>', start)
-  return close === -1 ? raw.slice(start) : raw.slice(start, close)
+  if (close === -1) return { body: raw.slice(start), tail: '', tagged: false }
+  return {
+    body: raw.slice(start, close),
+    tail: raw.slice(close + '</reply>'.length),
+    tagged: true,
+  }
 }

@@ -39,24 +39,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('parseGeneration', () => {
-  it('returns text with no handoff', () => {
+  it('returns untagged text with no handoff', () => {
     expect(parseGeneration('Hello there')).toEqual({
       text: 'Hello there',
       handoff: false,
       usage: null,
+      tagged: false,
     })
   })
 
-  it('detects + strips the handoff sentinel', () => {
+  it('detects + strips the handoff sentinel (untagged)', () => {
     expect(parseGeneration('[[HANDOFF]]')).toEqual({
       text: '',
       handoff: true,
       usage: null,
+      tagged: false,
     })
     expect(parseGeneration('Let me get a human [[HANDOFF]]')).toEqual({
       text: 'Let me get a human',
       handoff: true,
       usage: null,
+      tagged: false,
     })
   })
 
@@ -65,36 +68,53 @@ describe('parseGeneration', () => {
       parseGeneration(
         'Customer asks the ground-tank price; per the rules ask size first.\n\n<reply>كم طول الخزان وعرضه؟</reply>',
       ),
-    ).toEqual({ text: 'كم طول الخزان وعرضه؟', handoff: false, usage: null })
+    ).toEqual({ text: 'كم طول الخزان وعرضه؟', handoff: false, usage: null, tagged: true })
   })
 
-  it('uses the last <reply> block and tolerates a missing close tag', () => {
-    expect(parseGeneration('<reply>draft</reply> notes <reply>final')).toEqual({
+  it('uses the last <reply> block; an unclosed block is not tagged', () => {
+    expect(parseGeneration('<reply>draft</reply> notes <reply>final</reply>')).toEqual({
       text: 'final',
       handoff: false,
       usage: null,
+      tagged: true,
+    })
+    // e.g. cut off by the token limit — usable as a draft, never auto-sent
+    expect(parseGeneration('notes <reply>السعر ٢٧')).toEqual({
+      text: 'السعر ٢٧',
+      handoff: false,
+      usage: null,
+      tagged: false,
     })
   })
 
-  it('detects a handoff inside or outside the reply tags', () => {
+  it('detects a handoff inside or after the reply tags', () => {
     expect(parseGeneration('<reply>A colleague will call you. [[HANDOFF]]</reply>')).toEqual({
       text: 'A colleague will call you.',
       handoff: true,
       usage: null,
+      tagged: true,
     })
     expect(parseGeneration('thinking… <reply>Bye</reply>\n[[HANDOFF]]')).toEqual({
       text: 'Bye',
       handoff: true,
       usage: null,
+      tagged: true,
     })
+  })
+
+  it('ignores a handoff marker that only appears in the reasoning before the tags', () => {
+    expect(
+      parseGeneration('No handoff is needed; do not emit [[HANDOFF]]. <reply>السعر 276 ريال</reply>'),
+    ).toEqual({ text: 'السعر 276 ريال', handoff: false, usage: null, tagged: true })
   })
 
   it('passes usage straight through', () => {
     const usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
-    expect(parseGeneration('Hi', usage)).toEqual({
+    expect(parseGeneration('<reply>Hi</reply>', usage)).toEqual({
       text: 'Hi',
       handoff: false,
       usage,
+      tagged: true,
     })
   })
 })
@@ -119,6 +139,7 @@ describe('generateReply — OpenAI', () => {
       text: 'Sure — happy to help!',
       handoff: false,
       usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 },
+      tagged: false,
     })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain('api.openai.com')
@@ -178,6 +199,7 @@ describe('generateReply — Anthropic', () => {
       text: 'Hi there!',
       handoff: false,
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
+      tagged: false,
     })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain('api.anthropic.com')

@@ -88,6 +88,10 @@ export function AiConfig() {
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
+    // Forget the previous load's test numbers first: if this load fails
+    // (or belongs to a different account) a save must not write them back.
+    setTestNumbersAvailable(false);
+    setTestNumbers('');
     try {
       const res = await fetch('/api/ai/config');
       const data = await res.json();
@@ -95,6 +99,14 @@ export function AiConfig() {
         toast.error(data.error ?? t('loadFailed'));
         return;
       }
+      // Available even before the first save, so a new account can set
+      // test numbers before it ever switches auto-reply on.
+      setTestNumbersAvailable(Array.isArray(data.auto_reply_test_numbers));
+      setTestNumbers(
+        Array.isArray(data.auto_reply_test_numbers)
+          ? data.auto_reply_test_numbers.join('\n')
+          : '',
+      );
       if (data.configured) {
         setConfigured(true);
         setProvider(data.provider);
@@ -104,12 +116,6 @@ export function AiConfig() {
         setAutoReplyEnabled(data.auto_reply_enabled);
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
         setHandoffAgentId(data.handoff_agent_id ?? '');
-        setTestNumbersAvailable(Array.isArray(data.auto_reply_test_numbers));
-        setTestNumbers(
-          Array.isArray(data.auto_reply_test_numbers)
-            ? data.auto_reply_test_numbers.join('\n')
-            : '',
-        );
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);

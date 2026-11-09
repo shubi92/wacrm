@@ -113,6 +113,10 @@ vi.mock('./admin-client', () => ({
               h.state.updateFilters.push([col, val])
               return chain
             },
+            is: (col: string, val: unknown) => {
+              h.state.updateFilters.push([col, val])
+              return chain
+            },
             select: () =>
               Promise.resolve({
                 data: h.state.handoffWon ? [{ id: 'conv-1' }] : [],
@@ -175,7 +179,7 @@ beforeEach(() => {
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
-  h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false })
+  h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true })
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
 })
 
@@ -313,7 +317,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     it('does not send when someone replies while the reply is generating', async () => {
       h.generateReply.mockImplementation(async () => {
         h.state.messageRows.push(row({ created_at: new Date(NOW).toISOString() }))
-        return { text: 'Hello!', handoff: false }
+        return { text: 'Hello!', handoff: false, tagged: true }
       })
       await dispatchInboundToAiReply(ARGS)
       expect(h.generateReply).toHaveBeenCalled()
@@ -360,7 +364,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 
 describe('dispatchInboundToAiReply — handoff', () => {
   it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.state.rpcCalls).toHaveLength(0)
@@ -374,7 +378,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
 
   it('routes to the configured handoff agent on handoff', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({
       ai_autoreply_disabled: true,
@@ -386,10 +390,14 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({
       text: 'A colleague will contact you shortly.',
       handoff: true,
+      tagged: true,
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    // Guarded on: still bot-owned, unassigned, and not resumed since.
     expect(h.state.updateFilters).toContainEqual(['ai_autoreply_disabled', false])
+    expect(h.state.updateFilters).toContainEqual(['assigned_agent_id', null])
+    expect(h.state.updateFilters).toContainEqual(['ai_resumed_at', null])
     expect(h.engineSendText).toHaveBeenCalledTimes(1)
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -403,7 +411,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
 
   it('does not send the handoff message when a concurrent handoff already won', async () => {
     h.state.handoffWon = false
-    h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true })
+    h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
@@ -416,10 +424,59 @@ describe('dispatchInboundToAiReply — handoff', () => {
         ai_generated: false,
         created_at: new Date().toISOString(),
       })
-      return { text: 'A colleague will help.', handoff: true }
+      return { text: 'A colleague will help.', handoff: true, tagged: true }
     })
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('never sends untagged output (possible leaked reasoning); hands off instead', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Customer asks the price; per the rules… السعر ٢٧٦',
+      handoff: false,
+      tagged: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toHaveLength(0)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('guards a stale handoff on the resume time it read', async () => {
+    h.state.conv = { ...h.state.conv, ai_resumed_at: '2026-11-09T10:00:00.000Z' }
+    h.generateReply.mockResolvedValue({ text: 'Bye', handoff: true, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updateFilters).toContainEqual(['ai_resumed_at', '2026-11-09T10:00:00.000Z'])
+  })
+
+  it('drops an ordinary reply when the thread was paused and resumed during generation', async () => {
+    h.generateReply.mockImplementation(async () => {
+      h.state.conv = { ...h.state.conv, ai_resumed_at: new Date().toISOString() }
+      return { text: 'Hello!', handoff: false, tagged: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.rpcCalls).toHaveLength(0) // no fresh slot consumed
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does not send when the contact phone changed to an unlisted number during generation', async () => {
+    h.state.testNumbers = ['966500000000']
+    h.generateReply.mockImplementation(async () => {
+      h.state.contactPhone = '966511111111'
+      return { text: 'Hello!', handoff: false, tagged: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does not send an ordinary reply when the thread was handed off during generation', async () => {
+    h.generateReply.mockImplementation(async () => {
+      // A racing inbound paused the thread after our eligibility read.
+      h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true }
+      return { text: 'Hello!', handoff: false, tagged: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 })
