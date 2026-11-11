@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildHandoffSummary } from './handoff'
+import { buildHandoffSummary, handoffFallbackMessage } from './handoff'
 import type { HandoffLead } from './lead'
 
 describe('buildHandoffSummary', () => {
@@ -117,5 +117,22 @@ describe('buildHandoffSummary — ready customer', () => {
     const plain = '🤖 AI agent handed off after 2 replies. Last customer message: “نعم، احجزوا لي”'
     expect(buildHandoffSummary({ messages, replyCount: 2 })).toBe(plain)
     expect(buildHandoffSummary({ messages, replyCount: 2, lead: null, leadUnreadable: false })).toBe(plain)
+  })
+})
+
+describe('handoffFallbackMessage', () => {
+  it('is Arabic for Arabic script and English otherwise', () => {
+    expect(handoffFallbackMessage('كم السعر؟')).toMatch(/[\u0600-\u06FF]/)
+    expect(handoffFallbackMessage('ok تمام')).toMatch(/[\u0600-\u06FF]/)
+    expect(handoffFallbackMessage('What services do you provide?')).toMatch(/^Your request/)
+    expect(handoffFallbackMessage('')).toMatch(/^Your request/)
+  })
+})
+
+describe('buildHandoffSummary — unusable output', () => {
+  it('says the bot did not choose the handoff', () => {
+    const note = buildHandoffSummary({ messages: [{ role: 'user', content: 'hi' }], replyCount: 0, unsendable: true })
+    expect(note).toContain('did not choose this')
+    expect(note).toContain('Last customer message')
   })
 })

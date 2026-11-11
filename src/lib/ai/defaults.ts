@@ -57,8 +57,11 @@ export function buildSystemPrompt(args: {
   mode: 'draft' | 'auto_reply'
   /** Knowledge-base excerpts retrieved for the current question. */
   knowledge?: string[]
+  /** Auto-reply only: a person switched the bot back on for this chat
+   *  after an earlier handoff ("Resume AI"). */
+  resumed?: boolean
 }): string {
-  const { userPrompt, mode, knowledge } = args
+  const { userPrompt, mode, knowledge, resumed } = args
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
@@ -90,6 +93,16 @@ export function buildSystemPrompt(args: {
 
   if (userPrompt && userPrompt.trim()) {
     parts.push(`Business context and instructions:\n${userPrompt.trim()}`)
+  }
+
+  // After the account's own rules, so it wins over a "stay quiet once
+  // you have handed off" rule there: without this the model reads its
+  // own old "a colleague will contact you" in the history and hands off
+  // again, in silence, on every message.
+  if (mode === 'auto_reply' && resumed) {
+    parts.push(
+      'This conversation was handed to the team earlier, and a team member has now switched you back on for it. Any earlier handoff in the conversation is finished. Answer the customer\'s latest message yourself, exactly as you would in a new conversation; hand off again only if this latest message itself calls for it.',
+    )
   }
 
   if (knowledge && knowledge.length > 0) {

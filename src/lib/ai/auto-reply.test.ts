@@ -155,6 +155,11 @@ const ARGS = {
   configOwnerUserId: 'user-1',
 }
 
+/** The standard line a customer gets when the bot hands off wordlessly. */
+const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
+const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
+
 function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
     provider: 'openai',
@@ -273,14 +278,14 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('sends no further reply once the per-conversation cap is reached', async () => {
+  it('sends no further reply of its own once the per-conversation cap is reached', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: false,
       ai_reply_count: 3,
     }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE]) // never the model's "Hello!"
     expect(h.state.rpcCalls).toHaveLength(0)
   })
 
@@ -384,10 +389,11 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
+  it('disables auto-reply, writes a summary, and tells the customer on a wordless handoff', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, tagged: true })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE])
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ aiGenerated: true }))
     expect(h.state.rpcCalls).toHaveLength(0)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain(
@@ -459,7 +465,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
       tagged: false,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE]) // the standard line, never the untagged text
     expect(h.state.rpcCalls).toHaveLength(0)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
@@ -734,7 +740,8 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: null, leadUnreadable: false, tagged: false })
     await dispatchInboundToAiReply(ARGS)
     expect(event()).toMatchObject({ reason: 'other', lead: null })
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE])
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('did not choose this')
   })
 
   it('reports voice_note_failed when a voice note cannot be understood', async () => {
@@ -759,7 +766,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('limit of 3 replies')
     expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
     expect(event()).toMatchObject({ reason: 'reply_cap', lead: null })
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE])
     expect(h.state.rpcCalls).toHaveLength(0)
   })
 
@@ -826,5 +833,91 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     expect(h.state.updatePayload).toBeNull()
     expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — a handoff is never silent', () => {
+  const bare = { text: '', handoff: true, lead: null, leadUnreadable: false, tagged: true }
+
+  it('answers in Arabic when the customer wrote in Arabic', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'السلام عليكم' },
+      { role: 'assistant', content: 'Hello' },
+      { role: 'user', content: 'كم سعر تنظيف المكيف؟' },
+    ])
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([AR_LINE])
+  })
+
+  it('keeps the model’s own goodbye when it wrote one', async () => {
+    h.generateReply.mockResolvedValue({ ...bare, text: 'A colleague will call you.' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['A colleague will call you.'])
+  })
+
+  it('a wordless handoff leaves a note that says the bot chose it', async () => {
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload?.ai_handoff_summary).not.toContain('did not choose this')
+  })
+
+  it.each([
+    ['another inbound already won the handoff', () => { h.state.handoffWon = false }],
+    ['the contact is no longer on the test list', () => {
+      // On the list when the message arrived, edited off it before the send.
+      h.state.testNumbers = ['966500000000']
+      h.generateReply.mockImplementation(async () => {
+        h.state.contactPhone = '966599999999'
+        return bare
+      })
+    }],
+    ['a teammate replied while the model was thinking', () => {
+      h.generateReply.mockImplementation(async () => {
+        h.state.messageRows = [
+          { conversation_id: 'conv-1', sender_type: 'agent', ai_generated: false, created_at: new Date().toISOString() },
+        ]
+        return bare
+      })
+    }],
+  ])('sends nothing when %s', async (_label, arrange) => {
+    h.generateReply.mockResolvedValue(bare)
+    arrange()
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('stays out of a voice note it could not understand (a person must listen first)', async () => {
+    h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'failed', reason: 'no speech could be made out in the voice note.' })
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.1', accessToken: 'token' },
+    })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('is sent as text only, even when the customer spoke', async () => {
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.1', accessToken: 'token' },
+    })
+    expect(sentTexts()).toHaveLength(1)
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — after Resume AI', () => {
+  const prompt = () => h.generateReply.mock.calls[0][0].systemPrompt as string
+
+  it('tells the model it has been switched back on, so an old handoff in the history does not repeat', async () => {
+    h.state.conv = { ...h.state.conv, ai_resumed_at: '2026-11-11T20:10:00.000Z' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(prompt()).toContain('switched you back on')
+  })
+
+  it('says nothing of the kind on a thread that was never handed off', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(prompt()).not.toContain('switched you back on')
   })
 })

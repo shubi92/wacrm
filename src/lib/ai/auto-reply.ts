@@ -4,7 +4,7 @@ import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
-import { buildHandoffSummary } from './handoff'
+import { buildHandoffSummary, handoffFallbackMessage } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
@@ -197,6 +197,7 @@ export async function dispatchInboundToAiReply(
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      resumed: !!conv.ai_resumed_at,
     })
 
     const { text, handoff, lead, leadUnreadable, usage, tagged } = await generateReply({
@@ -253,19 +254,21 @@ export async function dispatchInboundToAiReply(
               replyCount: conv.ai_reply_count ?? 0,
               lead,
               leadUnreadable,
+              unsendable: !handoff,
             }),
       })
 
       // A handoff can carry a short message for the customer ("a colleague
-      // will contact you shortly"); without it they'd get silence. Sent
-      // after the handoff is recorded, and skipped if a human replied while
-      // the model was generating — they're already talking to the customer.
-      // Untagged output is never sent (see above).
+      // will contact you shortly"). When the model wrote none we may send
+      // — it handed off bare, its output was unusable, or the cap withheld
+      // an ordinary reply — a standard line goes instead: the customer is
+      // never left in silence. Sent after the handoff is recorded, and
+      // skipped if a human replied while the model was generating —
+      // they're already talking to the customer.
+      const goodbye =
+        text && tagged && handoff ? text : handoffFallbackMessage(latestUserMessage(messages))
       try {
         if (
-          text &&
-          tagged &&
-          handoff && // never the reply the cap just withheld
           won &&
           !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) &&
           (await contactPassesTestNumbers(db, accountId, contactId))
@@ -275,7 +278,7 @@ export async function dispatchInboundToAiReply(
             userId: configOwnerUserId,
             conversationId,
             contactId,
-            text,
+            text: goodbye,
             aiGenerated: true,
           })
         }

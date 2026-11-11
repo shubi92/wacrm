@@ -31,3 +31,12 @@ describe('buildSystemPrompt — ready customers', () => {
     expect(prompt).not.toMatch(/btu/i)
   })
 })
+
+describe('buildSystemPrompt — after Resume AI', () => {
+  it('puts the "switched back on" rule after the account\'s own instructions, in auto-reply only', () => {
+    const prompt = buildSystemPrompt({ userPrompt: 'ACCOUNT RULES', mode: 'auto_reply', resumed: true })
+    expect(prompt.indexOf('switched you back on')).toBeGreaterThan(prompt.indexOf('ACCOUNT RULES'))
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('switched you back on')
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'draft', resumed: true })).not.toContain('switched you back on')
+  })
+})

@@ -6,6 +6,19 @@ import type { HandoffLead } from './lead'
 const MAX_QUOTE_LEN = 160
 
 /**
+ * What the customer is told when the bot hands off without a message of
+ * its own — a handoff must never be met with silence. Arabic when the
+ * customer wrote in Arabic script, English otherwise.
+ * ponytail: two fixed lines; move to ai_configs if an account needs its
+ * own wording.
+ */
+export function handoffFallbackMessage(lastCustomerText: string): string {
+  return /[\u0600-\u06FF]/.test(lastCustomerText)
+    ? 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+    : 'Your request has been passed to our team and they will contact you shortly.'
+}
+
+/**
  * Build the short internal note the auto-reply bot leaves on a
  * conversation when it hands off to a human. Deterministic — composed
  * from context we already have (no extra LLM call / token spend), so it
@@ -26,8 +39,12 @@ export function buildHandoffSummary(args: {
   lead?: HandoffLead | null
   /** The bot wrote lead details that could not be read. */
   leadUnreadable?: boolean
+  /** The model did not ask to hand off — its answer just wasn't in a
+   *  form that may be sent. Said in the note, since it means a fault,
+   *  not a decision. */
+  unsendable?: boolean
 }): string {
-  const { messages, replyCount, lead, leadUnreadable } = args
+  const { messages, replyCount, lead, leadUnreadable, unsendable } = args
 
   const lastCustomer = [...messages]
     .reverse()
@@ -50,6 +67,8 @@ export function buildHandoffSummary(args: {
     base += ` Customer is ready: ${facts.join(', ')}.`
   } else if (leadUnreadable) {
     base += ' The customer looks ready to book, but the details could not be read — please check the chat.'
+  } else if (unsendable) {
+    base += ' The bot did not choose this: its answer was empty or not in a form that can be sent.'
   }
 
   if (!lastCustomer) return base
