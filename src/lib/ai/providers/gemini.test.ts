@@ -116,6 +116,9 @@ describe('transcribeAudio', () => {
   it("maps the no-speech sentinel to ''", async () => {
     fetchMock().mockResolvedValue(okResponse(transcript(' [[NO_SPEECH]]\n')))
     await expect(transcribeAudio(ARGS)).resolves.toBe('')
+    // …even when the model dresses the marker up.
+    fetchMock().mockResolvedValue(okResponse(transcript('[[NO_SPEECH]].')))
+    await expect(transcribeAudio(ARGS)).resolves.toBe('')
   })
 
   it('throws "blocked" when the prompt was blocked (no candidates)', async () => {

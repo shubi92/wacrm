@@ -159,6 +159,16 @@ describe('transcribeInboundVoiceNote', () => {
     expect(h.transcribeAudio).not.toHaveBeenCalled()
   })
 
+  it('applies the size cap even when the file claims to be short', async () => {
+    h.inspectOggOpus.mockReturnValue({ ...OGG_MONO, durationSeconds: 5 })
+    h.downloadMedia.mockResolvedValue({
+      buffer: Buffer.alloc(MAX_VOICE_NOTE_BYTES + 1),
+      contentType: 'audio/ogg',
+    })
+    expect(await transcribeInboundVoiceNote(fakeDb(), LISTEN)).toMatchObject({ status: 'failed' })
+    expect(h.transcribeAudio).not.toHaveBeenCalled()
+  })
+
   it('fails when the transcript comes back empty', async () => {
     h.transcribeAudio.mockResolvedValue('  ')
     const out = await transcribeInboundVoiceNote(fakeDb(), LISTEN)

@@ -70,6 +70,14 @@ describe('inspectOggOpus', () => {
     })
   })
 
+  it('measures the longest stream when a short one is chained after it', () => {
+    const bytes = new Uint8Array([
+      ...oggOpus(1, PRE_SKIP + 48_000 * 600), // ten minutes…
+      ...oggOpus(1, PRE_SKIP + 48_000 * 5), // …then a five-second stream
+    ])
+    expect(inspectOggOpus(bytes).durationSeconds).toBe(600)
+  })
+
   it('gives a null duration when only the header page is there', () => {
     expect(inspectOggOpus(new Uint8Array(oggPage(0, opusHead(1, PRE_SKIP))))).toEqual({
       isOggOpus: true,

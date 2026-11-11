@@ -334,9 +334,17 @@ async function handleStatusUpdate(rawStatus: {
   // Meta reports a voice message the customer listened to as "played"
   // (since 2026-03). We don't track that separately — the CHECK on
   // messages.status and the public webhook contract only know
-  // sent/delivered/read/failed — and a played note was necessarily read.
-  const status =
-    rawStatus.status === 'played' ? { ...rawStatus, status: 'read' } : rawStatus
+  // sent/delivered/read/failed. A played note was necessarily read, so
+  // just make sure the message shows as read; the "read" event itself
+  // already did the rest (broadcast mirror, webhook fan-out).
+  if (rawStatus.status === 'played') {
+    await supabaseAdmin()
+      .from('messages')
+      .update({ status: 'read' })
+      .eq('message_id', rawStatus.id)
+    return
+  }
+  const status = rawStatus
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status. No
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids

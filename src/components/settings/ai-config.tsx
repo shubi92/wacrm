@@ -614,6 +614,13 @@ export function AiConfig() {
                       setGeminiKeyEdited(true);
                     }
                   }}
+                  // Clicking in and out without typing keeps the saved key.
+                  onBlur={() => {
+                    if (geminiKeyEdited && hasStoredGeminiKey && !geminiKey.trim()) {
+                      setGeminiKey(MASKED_KEY);
+                      setGeminiKeyEdited(false);
+                    }
+                  }}
                   disabled={disabled}
                   autoComplete="off"
                 />
@@ -654,6 +661,13 @@ export function AiConfig() {
                       if (!elevenLabsKeyEdited && hasStoredElevenLabsKey) {
                         setElevenLabsKey('');
                         setElevenLabsKeyEdited(true);
+                      }
+                    }}
+                    // Clicking in and out without typing keeps the saved key.
+                    onBlur={() => {
+                      if (elevenLabsKeyEdited && hasStoredElevenLabsKey && !elevenLabsKey.trim()) {
+                        setElevenLabsKey(MASKED_KEY);
+                        setElevenLabsKeyEdited(false);
                       }
                     }}
                     disabled={disabled}

@@ -155,7 +155,8 @@ export async function transcribeAudio(args: {
       code: 'empty_response',
     })
   }
-  return text === NO_SPEECH ? '' : text
+  // `includes`, not `===`: the model may wrap the marker in punctuation.
+  return text.includes(NO_SPEECH) ? '' : text
 }
 
 /**

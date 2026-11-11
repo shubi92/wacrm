@@ -43,7 +43,10 @@ export function inspectOggOpus(bytes: Uint8Array): {
     if (pos + PAGE_HEADER_BYTES + segments > bytes.length) break
     const lo = view.getUint32(pos + 6, true)
     const hi = view.getUint32(pos + 10, true)
-    if (!(lo === 0xffffffff && hi === 0xffffffff)) granule = hi * 2 ** 32 + lo
+    // Max, not last: a second stream chained on the end restarts at zero.
+    if (!(lo === 0xffffffff && hi === 0xffffffff)) {
+      granule = Math.max(granule, hi * 2 ** 32 + lo)
+    }
     let payload = 0
     for (let i = 0; i < segments; i++) payload += bytes[pos + PAGE_HEADER_BYTES + i]
     pos += PAGE_HEADER_BYTES + segments + payload

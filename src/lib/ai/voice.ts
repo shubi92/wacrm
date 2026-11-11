@@ -27,8 +27,9 @@ import { AiError } from './types'
 
 /** Longest voice note the bot will listen to. Longer ones go to a person. */
 export const MAX_VOICE_NOTE_SECONDS = 180
-/** Size cap used only when the length can't be read (audio that isn't
- *  Ogg/Opus, e.g. a forwarded MP3) — roughly 3 minutes of MP3. */
+/** Size cap, always applied: it is the only limit when the length can't
+ *  be read (audio that isn't Ogg/Opus, e.g. a forwarded MP3 — roughly 3
+ *  minutes of it), and it bounds a file whose length reads falsely short. */
 export const MAX_VOICE_NOTE_BYTES = 3 * 1024 * 1024
 
 const TRANSCRIBE_TIMEOUT_MS = 25_000
@@ -79,9 +80,8 @@ export async function transcribeInboundVoiceNote(
 
     const { durationSeconds } = inspectOggOpus(buffer)
     const tooLong =
-      durationSeconds !== null
-        ? durationSeconds > MAX_VOICE_NOTE_SECONDS
-        : buffer.byteLength > MAX_VOICE_NOTE_BYTES
+      buffer.byteLength > MAX_VOICE_NOTE_BYTES ||
+      (durationSeconds !== null && durationSeconds > MAX_VOICE_NOTE_SECONDS)
     if (tooLong) {
       return {
         status: 'failed',
