@@ -1,14 +1,16 @@
 // ============================================================
-// The "ready customer" block.
+// The lead block: what the bot collected from the customer.
 //
-// When a customer says yes, the auto-reply bot hands the chat over and
-// adds, OUTSIDE its <reply> tags, one block:
+// Whenever the auto-reply bot hands a chat over and knows something
+// about what the customer wants, it adds, OUTSIDE its <reply> tags:
 //
-//   <lead>{ "service": "...", "details": [...], ... }</lead>
+//   <lead>{ "ready": true, "service": "...", "details": [...], ... }</lead>
 //
-// `parseGeneration` reads it; it rides on the `conversation.handed_off`
-// webhook as `data.lead`. The shape is a public contract (see
-// docs/public-api.md) — change it only together with its consumers.
+// `ready` says whether the customer said yes; it decides the handoff's
+// `reason` and is not part of the lead itself. `parseGeneration` reads
+// the block; the lead rides on the `conversation.handed_off` webhook as
+// `data.lead`. That shape is a public contract (see docs/public-api.md)
+// — change it only together with its consumers.
 // ============================================================
 
 export const LEAD_SERVICES = [
@@ -65,21 +67,27 @@ export function maskLeadBlocks(text: string, mark: string): string {
 }
 
 /**
- * Read the last complete lead block in the model's raw output. Returns
- * null when there is none, it says nothing, or it is unusable (never
- * closed — e.g. cut off by the token limit — or not a JSON object).
- * Individual fields that don't fit the contract are dropped to null /
- * "other" rather than failing the whole block: a usable lead beats a
- * perfect one.
+ * Read the last complete lead block in the model's raw output: the lead,
+ * and whether the customer said yes (`ready`). Returns null when there
+ * is no block, it says nothing, or it is unusable (never closed — e.g.
+ * cut off by the token limit — or not a JSON object). Individual fields
+ * that don't fit the contract are dropped to null / "other" rather than
+ * failing the whole block: a usable lead beats a perfect one.
  */
-export function parseLeadBlock(raw: string): HandoffLead | null {
+export function parseLeadBlock(raw: string): ParsedLead | null {
   const inner = [...raw.matchAll(block())].at(-1)?.[1]
   return (inner === undefined ? null : read(inner)) ?? null
 }
 
+export interface ParsedLead {
+  lead: HandoffLead
+  /** The customer clearly said yes. Anything but a plain `true` is no. */
+  ready: boolean
+}
+
 /** One block's content → the lead, `null` when it can't be read, or
  *  `undefined` when it says nothing (not a lead, and not a handoff). */
-function read(inner: string): HandoffLead | null | undefined {
+function read(inner: string): ParsedLead | null | undefined {
   if (BLANK.test(inner)) return undefined
 
   // Models like to wrap the JSON in a markdown fence or a few words.
@@ -112,15 +120,18 @@ function read(inner: string): HandoffLead | null | undefined {
     area: text(o.area),
     preferred_date: text(o.preferred_date),
   }
-  // An object that tells us nothing ("{}", all nulls) is not a lead.
+  const ready = o.ready === true || o.ready === 'true'
+  // An object that tells us nothing ("{}", all nulls) is not a lead. A
+  // yes always is: `customer_ready` never travels without one.
   const says =
+    ready ||
     lead.service !== 'other' ||
     lead.details.length > 0 ||
     lead.quoted_price_sar !== null ||
     lead.customer_name ||
     lead.area ||
     lead.preferred_date
-  return says ? lead : undefined
+  return says ? { lead, ready } : undefined
 }
 
 /** A non-empty trimmed string (numbers and yes/no flags allowed), or null. */

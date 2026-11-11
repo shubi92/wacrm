@@ -79,15 +79,17 @@ export function buildSystemPrompt(args: {
     // The mechanism only. WHAT to ask for each service lives in the
     // account's own instructions (appended below), not in code.
     parts.push(
-      'Ready customers. A customer is "ready" only once they have clearly said yes: they accept a price you quoted, or — for a service you cannot price — they confirm they want to book or want a team member to contact them. Questions alone are never a yes. ' +
-        'If the business instructions below list questions to ask for a service, ask them before treating the customer as ready. ' +
-        `When a customer is ready, hand off exactly as described above (a short message ending with ${HANDOFF_SENTINEL} inside the reply tags) and then, AFTER the closing </reply> tag, add one block <lead>{...}</lead> holding a single JSON object with exactly these keys: ` +
+      'Passing on what you collected. Whenever you hand off and you already know which service the customer wants, or they have answered at least one of your questions, add — AFTER the closing </reply> tag — one block <lead>{...}</lead> holding a single JSON object with exactly these keys: ' +
+        '"ready" (true or false, see below), ' +
         `"service" (one of: ${LEAD_SERVICES.join(', ')}), ` +
         '"details" (a list of {"question": "...", "answer": "..."} pairs: each thing you asked or the business instructions required, with the customer\'s answer, in the customer\'s own language), ' +
         '"quoted_price_sar" (the price in SAR you actually quoted in this conversation, as a number, or null if you quoted none), ' +
         '"customer_name", "area" (the city / district as the customer said it) and "preferred_date" (as the customer said it). ' +
         'Use null for anything the customer did not say — never guess or invent a value. ' +
-        'The <lead> block is read by software and never shown to the customer: never put it inside the reply tags, and never write one unless the customer is ready.',
+        'Set "ready" to true only once the customer has clearly said yes: they accept a price you quoted, or — for a service you cannot price — they confirm they want to book or want a team member to contact them. Questions alone are never a yes; in every other handoff "ready" is false. ' +
+        `A customer saying yes is itself a reason to hand off: do it exactly as described above (a short message ending with ${HANDOFF_SENTINEL} inside the reply tags), with "ready": true. ` +
+        'If the business instructions below list questions to ask for a service, ask them before treating the customer as ready. ' +
+        'The <lead> block is read by software and never shown to the customer: never put it inside the reply tags, and never write one on a turn where you are not handing off.',
     )
   }
 

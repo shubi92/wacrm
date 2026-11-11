@@ -682,6 +682,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
       text: 'تم، سيتواصل معك أحد الزملاء.',
       handoff: true,
       lead: LEAD,
+      ready: true,
       leadUnreadable: false,
       tagged: true,
     })
@@ -706,6 +707,39 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     // The customer gets the goodbye and nothing else.
     expect(h.engineSendText).toHaveBeenCalledTimes(1)
     expect(h.engineSendText.mock.calls[0][0].text).toBe('تم، سيتواصل معك أحد الزملاء.')
+  })
+
+  it('a handoff without a yes still passes on what the bot collected (the rep prices it)', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'سيتواصل معك أحد الزملاء لتحديد السعر.',
+      handoff: true,
+      lead: { ...LEAD, service: 'villa_cleaning', quoted_price_sar: null },
+      ready: false,
+      leadUnreadable: false,
+      tagged: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({
+      reason: 'bot_cannot_help',
+      lead: { ...LEAD, service: 'villa_cleaning', quoted_price_sar: null },
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('Collected so far: villa cleaning')
+    expect(h.state.updatePayload?.ai_handoff_summary).not.toContain('Customer is ready')
+  })
+
+  it('details survive output that could not be sent: reason other, lead kept', async () => {
+    h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: LEAD, ready: false, leadUnreadable: false, tagged: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(event()).toMatchObject({ reason: 'other', lead: LEAD })
+  })
+
+  it('details the model wrote on an ordinary turn are ignored: no handoff, no event', async () => {
+    h.generateReply.mockResolvedValue({ text: 'كم عدد المكيفات؟', handoff: false, lead: LEAD, ready: false, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['كم عدد المكيفات؟'])
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
   })
 
   it('a plain model handoff reports bot_cannot_help with no lead', async () => {
@@ -772,7 +806,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
 
   it('at the reply cap: a customer who says yes is still handed over with their details', async () => {
     h.state.conv = AT_CAP
-    h.generateReply.mockResolvedValue({ text: 'تم', handoff: true, lead: LEAD, leadUnreadable: false, tagged: true })
+    h.generateReply.mockResolvedValue({ text: 'تم', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
     expect(event()).toMatchObject({ reason: 'customer_ready', lead: LEAD })
@@ -803,7 +837,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
 
   it('fires nothing when another inbound already won the handoff', async () => {
     h.state.handoffWon = false
-    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, leadUnreadable: false, tagged: true })
+    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
@@ -816,7 +850,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
   })
 
   it('still reports the handoff when sending the goodbye fails', async () => {
-    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, leadUnreadable: false, tagged: true })
+    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
     h.engineSendText.mockRejectedValue(new Error('Meta is down'))
     await dispatchInboundToAiReply(ARGS)
     expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
@@ -824,7 +858,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
   })
 
   it.each([
-    ['a ready customer', () => h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, leadUnreadable: false, tagged: true })],
+    ['a ready customer', () => h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })],
     ['the reply cap', () => { h.state.conv = AT_CAP }],
   ])('test mode holds: nothing fires for a number off the test list (%s)', async (_label, arrange) => {
     arrange()

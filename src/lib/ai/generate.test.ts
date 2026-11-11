@@ -44,6 +44,7 @@ describe('parseGeneration', () => {
       text: 'Hello there',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: false,
@@ -55,6 +56,7 @@ describe('parseGeneration', () => {
       text: '',
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: false,
@@ -63,6 +65,7 @@ describe('parseGeneration', () => {
       text: 'Let me get a human',
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: false,
@@ -74,7 +77,7 @@ describe('parseGeneration', () => {
       parseGeneration(
         'Customer asks the ground-tank price; per the rules ask size first.\n\n<reply>كم طول الخزان وعرضه؟</reply>',
       ),
-    ).toEqual({ text: 'كم طول الخزان وعرضه؟', handoff: false, lead: null, leadUnreadable: false, usage: null, tagged: true })
+    ).toEqual({ text: 'كم طول الخزان وعرضه؟', handoff: false, lead: null, ready: false, leadUnreadable: false, usage: null, tagged: true })
   })
 
   it('uses the last <reply> block; an unclosed block is not tagged', () => {
@@ -82,6 +85,7 @@ describe('parseGeneration', () => {
       text: 'final',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: true,
@@ -91,6 +95,7 @@ describe('parseGeneration', () => {
       text: 'السعر ٢٧',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: false,
@@ -102,6 +107,7 @@ describe('parseGeneration', () => {
       text: 'A colleague will call you.',
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: true,
@@ -110,6 +116,7 @@ describe('parseGeneration', () => {
       text: 'Bye',
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: true,
@@ -119,7 +126,7 @@ describe('parseGeneration', () => {
   it('ignores a handoff marker that only appears in the reasoning before the tags', () => {
     expect(
       parseGeneration('No handoff is needed; do not emit [[HANDOFF]]. <reply>السعر 276 ريال</reply>'),
-    ).toEqual({ text: 'السعر 276 ريال', handoff: false, lead: null, leadUnreadable: false, usage: null, tagged: true })
+    ).toEqual({ text: 'السعر 276 ريال', handoff: false, lead: null, ready: false, leadUnreadable: false, usage: null, tagged: true })
   })
 
   it('passes usage straight through', () => {
@@ -128,6 +135,7 @@ describe('parseGeneration', () => {
       text: 'Hi',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage,
       tagged: true,
@@ -146,6 +154,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
     preferred_date: 'يوم الخميس العصر',
   }
   const LEAD_BLOCK = `<lead>${JSON.stringify(LEAD)}</lead>`
+  const READY_BLOCK = `<lead>${JSON.stringify({ ready: true, ...LEAD })}</lead>`
 
   /** The "nothing leaks to the customer" guarantee. */
   function expectNoLeadIn(text: string) {
@@ -162,20 +171,31 @@ describe('parseGeneration — ready-customer <lead> block', () => {
       text: MESSAGE,
       handoff: true,
       lead: LEAD,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: true,
     })
   })
 
-  it('treats a valid lead block as a handoff even without the sentinel', () => {
-    expect(parseGeneration(`<reply>${MESSAGE}</reply>${LEAD_BLOCK}`)).toEqual({
+  it('a customer who said yes is a handoff even without the sentinel', () => {
+    expect(parseGeneration(`<reply>${MESSAGE}</reply>${READY_BLOCK}`)).toEqual({
       text: MESSAGE,
       handoff: true,
       lead: LEAD,
+      ready: true,
       leadUnreadable: false,
       usage: null,
       tagged: true,
+    })
+  })
+
+  it('details alone are not a handoff: without the sentinel the turn is an ordinary reply', () => {
+    expect(parseGeneration(`<reply>${MESSAGE}</reply>${LEAD_BLOCK}`)).toMatchObject({
+      text: MESSAGE,
+      handoff: false,
+      ready: false,
+      leadUnreadable: false,
     })
   })
 
@@ -186,6 +206,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
       text: MESSAGE,
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: true,
       usage: null,
       tagged: true,
@@ -200,6 +221,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
       text: MESSAGE,
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: true,
       usage: null,
       tagged: true,
@@ -229,6 +251,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
       text: 'السعر 276 ريال',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: true,
@@ -241,6 +264,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
       text: MESSAGE,
       handoff: true,
       lead: LEAD,
+      ready: false,
       leadUnreadable: false,
       usage: null,
       tagged: false,
@@ -250,7 +274,7 @@ describe('parseGeneration — ready-customer <lead> block', () => {
 })
 
 describe('parseGeneration — lead block placement', () => {
-  const LEAD_JSON = '{"service":"ac_cleaning","details":[],"quoted_price_sar":300,"customer_name":"Ahmed","area":null,"preferred_date":null}'
+  const LEAD_JSON = '{"ready":true,"service":"ac_cleaning","details":[],"quoted_price_sar":300,"customer_name":"Ahmed","area":null,"preferred_date":null}'
 
   it('accepts a valid block written before the reply', () => {
     const out = parseGeneration(`<lead>${LEAD_JSON}</lead>\n<reply>تم [[HANDOFF]]</reply>`)
@@ -310,6 +334,7 @@ describe('parseGeneration — lead block hardening', () => {
     expect(parseGeneration('<reply>سيتواصل معك زميل [[HANDOFF]]</reply><lead>{}</lead>')).toMatchObject({
       handoff: true,
       lead: null,
+      ready: false,
       leadUnreadable: false,
     })
   })
@@ -335,6 +360,7 @@ describe('generateReply — OpenAI', () => {
       text: 'Sure — happy to help!',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: { promptTokens: 42, completionTokens: 8, totalTokens: 50 },
       tagged: false,
@@ -397,6 +423,7 @@ describe('generateReply — Anthropic', () => {
       text: 'Hi there!',
       handoff: false,
       lead: null,
+      ready: false,
       leadUnreadable: false,
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
       tagged: false,

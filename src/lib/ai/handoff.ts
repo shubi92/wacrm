@@ -34,9 +34,11 @@ export function handoffFallbackMessage(lastCustomerText: string): string {
 export function buildHandoffSummary(args: {
   messages: ChatMessage[]
   replyCount: number
-  /** Set when the customer said yes — the note then leads with it, so
-   *  the details survive in the inbox even if a webhook delivery fails. */
+  /** What the bot collected — the note carries the key facts, so they
+   *  survive in the inbox even if a webhook delivery fails. */
   lead?: HandoffLead | null
+  /** The customer said yes. */
+  ready?: boolean
   /** The bot wrote lead details that could not be read. */
   leadUnreadable?: boolean
   /** The model did not ask to hand off — its answer just wasn't in a
@@ -44,7 +46,7 @@ export function buildHandoffSummary(args: {
    *  not a decision. */
   unsendable?: boolean
 }): string {
-  const { messages, replyCount, lead, leadUnreadable, unsendable } = args
+  const { messages, replyCount, lead, ready, leadUnreadable, unsendable } = args
 
   const lastCustomer = [...messages]
     .reverse()
@@ -64,9 +66,9 @@ export function buildHandoffSummary(args: {
       lead.area,
       lead.preferred_date,
     ].filter(Boolean)
-    base += ` Customer is ready: ${facts.join(', ')}.`
+    base += ` ${ready ? 'Customer is ready' : 'Collected so far'}: ${facts.join(', ')}.`
   } else if (leadUnreadable) {
-    base += ' The customer looks ready to book, but the details could not be read — please check the chat.'
+    base += ' The bot tried to pass on what it collected, but the details could not be read — please check the chat.'
   } else if (unsendable) {
     base += ' The bot did not choose this: its answer was empty or not in a form that can be sent.'
   }

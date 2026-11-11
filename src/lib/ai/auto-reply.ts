@@ -200,7 +200,7 @@ export async function dispatchInboundToAiReply(
       resumed: !!conv.ai_resumed_at,
     })
 
-    const { text, handoff, lead, leadUnreadable, usage, tagged } = await generateReply({
+    const { text, handoff, lead, ready, leadUnreadable, usage, tagged } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -233,13 +233,14 @@ export async function dispatchInboundToAiReply(
       // The model can't (or shouldn't, or may no longer) answer — hand
       // the thread to a human (see `handOff`). Only the winner sends the
       // goodbye below.
-      // A customer who said yes carries lead details (`lead`); a lead
+      // Whatever the bot collected (`lead`) goes along on every handoff;
+      // `ready` — the customer said yes — only decides the reason. A lead
       // block we couldn't read degrades to a plain handoff, never a lost one.
       // `capOnly`: a perfectly good reply the bot has no slot left to send.
       const capOnly = atCap && !handoff && !!text && tagged
       const { won, notified } = await handOff(db, {
         ...handoffBase,
-        reason: lead
+        reason: ready
           ? 'customer_ready'
           : capOnly
             ? 'reply_cap'
@@ -253,6 +254,7 @@ export async function dispatchInboundToAiReply(
               messages,
               replyCount: conv.ai_reply_count ?? 0,
               lead,
+              ready,
               leadUnreadable,
               unsendable: !handoff,
             }),
@@ -447,8 +449,9 @@ async function notifyHandoff(
       reason: args.reason,
       summary: args.summary,
       handed_off_at: handedOffAt,
-      // Lead details only ever travel with a customer who said yes.
-      lead: args.reason === 'customer_ready' ? (args.lead ?? null) : null,
+      // Whatever the bot collected, for any reason; `reason` alone says
+      // whether the customer said yes.
+      lead: args.lead ?? null,
     })
   } catch (err) {
     console.error('[ai auto-reply] handoff webhook failed:', err)

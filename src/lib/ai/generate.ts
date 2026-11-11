@@ -53,13 +53,13 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
 }
 
 /**
- * Split the raw model output into `{ text, handoff, lead, … }`. The
- * sentinel can appear alone or trailing a partial reply; either way we
- * treat the turn as a handoff and strip the marker from any remaining
- * text. A `<lead>` block (see `./lead`) marks a customer who said yes:
- * it is a handoff too, with or without the sentinel, and is never part
- * of the customer-visible text. `usage` is passed straight through (null
- * when the provider didn't report it).
+ * Split the raw model output into `{ text, handoff, lead, ready, … }`.
+ * The sentinel can appear alone or trailing a partial reply; either way
+ * we treat the turn as a handoff and strip the marker from any remaining
+ * text. A `<lead>` block (see `./lead`) carries what the bot collected
+ * and whether the customer said yes (`ready` — a handoff in itself); it
+ * is never part of the customer-visible text. `usage` is passed straight
+ * through (null when the provider didn't report it).
  */
 export function parseGeneration(
   raw: string,
@@ -75,15 +75,21 @@ export function parseGeneration(
   const signals = tagged ? body + tail : masked
   // A complete, valid lead block counts wherever the model put it (some
   // write it before the reply); a bare mention of the tag does not.
-  const lead = parseLeadBlock(raw)
-  const leadBlock = signals.includes(LEAD_MARK) || hasLeadTag(signals)
-  const handoff = signals.includes(HANDOFF_SENTINEL) || leadBlock || lead !== null
+  const parsed = parseLeadBlock(raw)
+  const lead = parsed?.lead ?? null
+  const ready = parsed?.ready ?? false
+  // A block where it counts that we could not read: the model meant to
+  // pass something on, so the turn is still a handoff — never a lost one.
+  const leadUnreadable = !lead && (signals.includes(LEAD_MARK) || hasLeadTag(signals))
+  // A customer saying yes is a handoff with or without the marker. Lead
+  // details alone are not: they only ride along when the bot hands off.
+  const handoff = signals.includes(HANDOFF_SENTINEL) || ready || leadUnreadable
   // A whole block inside the reply is cut out cleanly. Any other trace of
   // a lead tag there (cut off, or broken by what a customer typed) means
   // reply and data can't be told apart — so nothing is sent.
   const reply = body.split(LEAD_MARK).join('')
   const text = hasLeadTag(reply) ? '' : reply.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, lead, leadUnreadable: tagged && leadBlock && !lead, usage, tagged }
+  return { text, handoff, lead, ready, leadUnreadable: tagged && leadUnreadable, usage, tagged }
 }
 
 /** Stands in for a lead block while the output is parsed; never valid

@@ -20,25 +20,27 @@ const LEAD: HandoffLead = {
 }
 
 const block = (value: unknown) => `<lead>${JSON.stringify(value)}</lead>`
+/** Just the lead: most tests here don't care whether the customer said yes. */
+const leadOf = (raw: string) => parseLeadBlock(raw)?.lead ?? null
 
 describe('parseLeadBlock', () => {
   it('parses a well-formed block to the contract shape', () => {
-    expect(parseLeadBlock(`<reply>تم [[HANDOFF]]</reply>\n${block(LEAD)}`)).toEqual(LEAD)
+    expect(leadOf(`<reply>تم [[HANDOFF]]</reply>\n${block(LEAD)}`)).toEqual(LEAD)
   })
 
   it('drops keys that are not part of the contract', () => {
-    expect(parseLeadBlock(block({ ...LEAD, phone: '0550000000' }))).toEqual(LEAD)
+    expect(leadOf(block({ ...LEAD, phone: '0550000000' }))).toEqual(LEAD)
   })
 
   it('parses JSON wrapped in a markdown fence', () => {
     const json = JSON.stringify(LEAD, null, 2)
-    expect(parseLeadBlock(`<lead>\n\`\`\`json\n${json}\n\`\`\`\n</lead>`)).toEqual(LEAD)
-    expect(parseLeadBlock(`<lead>\`\`\`\n${json}\n\`\`\`</lead>`)).toEqual(LEAD)
+    expect(leadOf(`<lead>\n\`\`\`json\n${json}\n\`\`\`\n</lead>`)).toEqual(LEAD)
+    expect(leadOf(`<lead>\`\`\`\n${json}\n\`\`\`</lead>`)).toEqual(LEAD)
   })
 
   it('returns null when there is no block', () => {
-    expect(parseLeadBlock('<reply>أهلاً</reply>')).toBeNull()
-    expect(parseLeadBlock('')).toBeNull()
+    expect(leadOf('<reply>أهلاً</reply>')).toBeNull()
+    expect(leadOf('')).toBeNull()
   })
 
   it.each([
@@ -51,34 +53,34 @@ describe('parseLeadBlock', () => {
     ['an empty block', '<lead></lead>'],
     ['a whitespace-only block', '<lead>  \n </lead>'],
   ])('returns null for %s', (_name, raw) => {
-    expect(parseLeadBlock(raw)).toBeNull()
+    expect(leadOf(raw)).toBeNull()
   })
 
   it('accepts every listed service', () => {
     for (const service of LEAD_SERVICES) {
-      expect(parseLeadBlock(block({ ...LEAD, service }))?.service).toBe(service)
+      expect(leadOf(block({ ...LEAD, service }))?.service).toBe(service)
     }
   })
 
   it('falls back to "other" for an unknown or missing service', () => {
-    expect(parseLeadBlock(block({ ...LEAD, service: 'car_wash' }))?.service).toBe('other')
-    expect(parseLeadBlock(block({ ...LEAD, service: null }))?.service).toBe('other')
-    expect(parseLeadBlock(block({ customer_name: 'أحمد' }))?.service).toBe('other')
+    expect(leadOf(block({ ...LEAD, service: 'car_wash' }))?.service).toBe('other')
+    expect(leadOf(block({ ...LEAD, service: null }))?.service).toBe('other')
+    expect(leadOf(block({ customer_name: 'أحمد' }))?.service).toBe('other')
   })
 
   it('does not take an object that says nothing for a lead', () => {
-    expect(parseLeadBlock(block({}))).toBeNull()
+    expect(leadOf(block({}))).toBeNull()
     expect(
-      parseLeadBlock(
+      leadOf(
         block({ service: null, details: [], quoted_price_sar: null, customer_name: null, area: '', preferred_date: null }),
       ),
     ).toBeNull()
     // …but one fact is enough.
-    expect(parseLeadBlock(block({ service: 'pest_control' }))).toMatchObject({ service: 'pest_control', details: [] })
+    expect(leadOf(block({ service: 'pest_control' }))).toMatchObject({ service: 'pest_control', details: [] })
   })
 
   it('keeps a yes/no answer and never splits an emoji when cutting long text', () => {
-    const lead = parseLeadBlock(
+    const lead = leadOf(
       block({ ...LEAD, details: [{ question: 'مفروشة؟', answer: true }], area: 'ا'.repeat(299) + '🙂🙂' }),
     )
     expect(lead?.details).toEqual([{ question: 'مفروشة؟', answer: 'true' }])
@@ -86,9 +88,9 @@ describe('parseLeadBlock', () => {
   })
 
   it('treats details that are not an array as none', () => {
-    expect(parseLeadBlock(block({ ...LEAD, details: 'ثلاثة مكيفات' }))?.details).toEqual([])
-    expect(parseLeadBlock(block({ ...LEAD, details: { question: 'q', answer: 'a' } }))?.details).toEqual([])
-    expect(parseLeadBlock(block({ ...LEAD, details: null }))?.details).toEqual([])
+    expect(leadOf(block({ ...LEAD, details: 'ثلاثة مكيفات' }))?.details).toEqual([])
+    expect(leadOf(block({ ...LEAD, details: { question: 'q', answer: 'a' } }))?.details).toEqual([])
+    expect(leadOf(block({ ...LEAD, details: null }))?.details).toEqual([])
   })
 
   it('drops detail entries without both a question and an answer', () => {
@@ -103,7 +105,7 @@ describe('parseLeadBlock', () => {
       42,
       { question: ' هل يوجد مكيف مخفي؟ ', answer: ' لا ' },
     ]
-    expect(parseLeadBlock(block({ ...LEAD, details }))?.details).toEqual([
+    expect(leadOf(block({ ...LEAD, details }))?.details).toEqual([
       { question: 'كم عدد المكيفات؟', answer: '3' },
       { question: 'هل يوجد مكيف مخفي؟', answer: 'لا' },
     ])
@@ -123,25 +125,25 @@ describe('parseLeadBlock', () => {
     [null, null],
     [true, null],
   ])('reads quoted_price_sar %j as %j', (given, expected) => {
-    expect(parseLeadBlock(block({ ...LEAD, quoted_price_sar: given }))?.quoted_price_sar).toBe(expected)
+    expect(leadOf(block({ ...LEAD, quoted_price_sar: given }))?.quoted_price_sar).toBe(expected)
   })
 
   it('reads a missing quoted_price_sar as null', () => {
     // JSON.stringify drops an undefined key, so the block has no price at all
-    expect(parseLeadBlock(block({ ...LEAD, quoted_price_sar: undefined }))?.quoted_price_sar).toBeNull()
+    expect(leadOf(block({ ...LEAD, quoted_price_sar: undefined }))?.quoted_price_sar).toBeNull()
   })
 
   it('turns blank name, area and date into null and trims the rest', () => {
     expect(
-      parseLeadBlock(block({ ...LEAD, customer_name: '', area: '   ', preferred_date: '\n\t' })),
+      leadOf(block({ ...LEAD, customer_name: '', area: '   ', preferred_date: '\n\t' })),
     ).toEqual({ ...LEAD, customer_name: null, area: null, preferred_date: null })
-    expect(parseLeadBlock(block({ ...LEAD, customer_name: '  أحمد  ' }))?.customer_name).toBe('أحمد')
-    expect(parseLeadBlock(block({ ...LEAD, area: ['الرياض'] }))?.area).toBeNull()
+    expect(leadOf(block({ ...LEAD, customer_name: '  أحمد  ' }))?.customer_name).toBe('أحمد')
+    expect(leadOf(block({ ...LEAD, area: ['الرياض'] }))?.area).toBeNull()
   })
 
   it('caps over-long strings at 300 characters', () => {
     const long = 'ن'.repeat(500)
-    const lead = parseLeadBlock(
+    const lead = leadOf(
       block({ ...LEAD, customer_name: long, details: [{ question: long, answer: long }] }),
     )
     expect(lead?.customer_name).toBe('ن'.repeat(300))
@@ -150,25 +152,25 @@ describe('parseLeadBlock', () => {
 
   it('caps details at 30 entries, keeping the first ones', () => {
     const details = Array.from({ length: 40 }, (_, i) => ({ question: `س${i}`, answer: `ج${i}` }))
-    const lead = parseLeadBlock(block({ ...LEAD, details }))
+    const lead = leadOf(block({ ...LEAD, details }))
     expect(lead?.details).toHaveLength(30)
     expect(lead?.details[29]).toEqual({ question: 'س29', answer: 'ج29' })
   })
 
   it('uses the last block when there are two', () => {
     const raw = `${block({ ...LEAD, customer_name: 'الأول' })}\n${block({ ...LEAD, customer_name: 'الأخير' })}`
-    expect(parseLeadBlock(raw)?.customer_name).toBe('الأخير')
+    expect(leadOf(raw)?.customer_name).toBe('الأخير')
   })
 
   it('keeps the last complete block when a later one was cut off', () => {
-    expect(parseLeadBlock(`${block(LEAD)}\n<lead>{"service":`)).toEqual(LEAD)
+    expect(leadOf(`${block(LEAD)}\n<lead>{"service":`)).toEqual(LEAD)
   })
 
   it('reads a block whose tags or wrapping are slightly off', () => {
     const json = JSON.stringify(LEAD)
-    expect(parseLeadBlock(`<LEAD>${json}</LEAD>`)).toEqual(LEAD)
-    expect(parseLeadBlock(`<lead >${json}</ lead>`)).toEqual(LEAD)
-    expect(parseLeadBlock(`<lead>Here it is: ${json}</lead>`)).toEqual(LEAD)
+    expect(leadOf(`<LEAD>${json}</LEAD>`)).toEqual(LEAD)
+    expect(leadOf(`<lead >${json}</ lead>`)).toEqual(LEAD)
+    expect(leadOf(`<lead>Here it is: ${json}</lead>`)).toEqual(LEAD)
   })
 
   it.each([
@@ -177,7 +179,7 @@ describe('parseLeadBlock', () => {
     ['300 ريال', 300],
     ['300-400', null],
   ])('reads a price typed as %s', (typed, expected) => {
-    expect(parseLeadBlock(block({ ...LEAD, quoted_price_sar: typed }))?.quoted_price_sar).toBe(expected)
+    expect(leadOf(block({ ...LEAD, quoted_price_sar: typed }))?.quoted_price_sar).toBe(expected)
   })
 })
 
@@ -209,5 +211,27 @@ describe('maskLeadBlocks', () => {
 
   it('leaves a block that was never closed where it is', () => {
     expect(maskLeadBlocks('قبل <lead>{"service":', '§')).toBe('قبل <lead>{"service":')
+  })
+})
+
+describe('parseLeadBlock — the "said yes" flag', () => {
+  it('is true only for a plain true', () => {
+    expect(parseLeadBlock(block({ ...LEAD, ready: true }))).toEqual({ lead: LEAD, ready: true })
+    expect(parseLeadBlock(block({ ...LEAD, ready: 'true' }))?.ready).toBe(true)
+    for (const ready of [false, 'yes', 1, null, undefined]) {
+      expect(parseLeadBlock(block({ ...LEAD, ready }))).toEqual({ lead: LEAD, ready: false })
+    }
+  })
+
+  it('is not part of the lead that is passed on', () => {
+    expect(parseLeadBlock(block({ ...LEAD, ready: true }))?.lead).not.toHaveProperty('ready')
+  })
+
+  it('a yes with nothing else collected still gives a lead, so customer_ready never travels without one', () => {
+    expect(parseLeadBlock(block({ ready: true }))).toEqual({
+      lead: { service: 'other', details: [], quoted_price_sar: null, customer_name: null, area: null, preferred_date: null },
+      ready: true,
+    })
+    expect(parseLeadBlock(block({ ready: false }))).toBeNull()
   })
 })

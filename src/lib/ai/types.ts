@@ -70,11 +70,13 @@ export interface GenerateResult {
   text: string
   /** True when the model asked to hand off to a human (auto-reply mode). */
   handoff: boolean
-  /** Structured details of a customer who said yes (auto-reply mode);
-   *  null for every other turn. Implies `handoff`. */
+  /** What the bot collected from the customer (auto-reply mode), or
+   *  null when it wrote no lead block. Passed on with a handoff. */
   lead: HandoffLead | null
-  /** The model wrote a lead block that could not be read — the customer
-   *  probably said yes, but the turn is handled as a plain handoff. */
+  /** The customer said yes. Implies `handoff` and a non-null `lead`. */
+  ready: boolean
+  /** The model wrote a lead block that could not be read — the turn is
+   *  handled as a plain handoff, without details. */
   leadUnreadable: boolean
   /** Provider token usage for this call, or null when unavailable. */
   usage: AiUsage | null

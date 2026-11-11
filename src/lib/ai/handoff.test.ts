@@ -78,7 +78,7 @@ describe('buildHandoffSummary — ready customer', () => {
   }
 
   it('leads the note with the service, quoted price, name, area and date', () => {
-    expect(buildHandoffSummary({ messages, replyCount: 2, lead })).toBe(
+    expect(buildHandoffSummary({ messages, replyCount: 2, lead, ready: true })).toBe(
       '🤖 AI agent handed off after 2 replies. Customer is ready: kitchen bathroom cleaning, quoted 300 SAR, أحمد, الرياض - حي النرجس, يوم الخميس. Last customer message: “نعم، احجزوا لي”',
     )
   })
@@ -87,6 +87,7 @@ describe('buildHandoffSummary — ready customer', () => {
     const summary = buildHandoffSummary({
       messages,
       replyCount: 1,
+      ready: true,
       lead: { ...lead, quoted_price_sar: null, customer_name: null, preferred_date: null },
     })
     expect(summary).toBe(
@@ -101,9 +102,16 @@ describe('buildHandoffSummary — ready customer', () => {
     const summary = buildHandoffSummary({
       messages: [],
       replyCount: 1,
+      ready: true,
       lead: { ...lead, quoted_price_sar: null, customer_name: null, area: null, preferred_date: null },
     })
     expect(summary).toBe('🤖 AI agent handed off after 1 reply. Customer is ready: kitchen bathroom cleaning.')
+  })
+
+  it('lists what was collected without calling the customer ready when they have not said yes', () => {
+    expect(buildHandoffSummary({ messages: [], replyCount: 2, lead })).toBe(
+      '🤖 AI agent handed off after 2 replies. Collected so far: kitchen bathroom cleaning, quoted 300 SAR, أحمد, الرياض - حي النرجس, يوم الخميس.',
+    )
   })
 
   it('says the details could not be read when the lead was unreadable', () => {

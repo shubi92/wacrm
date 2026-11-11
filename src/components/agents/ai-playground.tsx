@@ -11,9 +11,10 @@ interface Turn {
   content: string;
   /** assistant-only: the agent signalled a human handoff on this turn. */
   handoff?: boolean;
-  /** assistant-only: the details the bot would pass on for a customer
-   *  who said yes (see `HandoffLead`). */
+  /** assistant-only: the details the bot would pass on with this
+   *  handoff (see `HandoffLead`), and whether the customer said yes. */
   lead?: Record<string, unknown> | null;
+  ready?: boolean;
 }
 
 export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
@@ -65,6 +66,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
               : '',
           handoff: Boolean(data.handoff),
           lead: data.lead ?? null,
+          ready: Boolean(data.ready),
         },
       ]);
     } catch {
@@ -164,7 +166,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
                   dir="auto"
                   className="mt-1.5 whitespace-pre-wrap border-t border-border/50 pt-1.5 text-xs text-muted-foreground"
                 >
-                  {`Customer is ready. Details passed on:\n${JSON.stringify(t.lead, null, 2)}`}
+                  {`${t.ready ? 'Customer said yes. ' : ''}Details passed on:\n${JSON.stringify(t.lead, null, 2)}`}
                 </pre>
               )}
             </div>

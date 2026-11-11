@@ -353,7 +353,7 @@ bot by hand.
   "reason": "customer_ready",
   "summary": "🤖 AI agent handed off after 4 replies. Customer is ready: …", // the internal handoff note
   "handed_off_at": "2026-11-11T19:54:00.000Z",
-  "lead": {
+  "lead": {                       // or null — see below
     "service": "ac_cleaning",
     "details": [{ "question": "كم عدد المكيفات؟", "answer": "3" }], // what the bot collected, in the customer's language
     "quoted_price_sar": 300,       // null unless the bot actually quoted a price
@@ -364,13 +364,19 @@ bot by hand.
 }
 ```
 
-| `reason`            | Meaning                                                        | `lead`   |
-| ------------------- | -------------------------------------------------------------- | -------- |
-| `customer_ready`    | The customer said yes (accepted a quoted price, or asked to book / be contacted) | object |
-| `bot_cannot_help`   | The bot decided a person should answer                         | `null`   |
-| `reply_cap`         | The bot used up its replies for this conversation              | `null`   |
-| `voice_note_failed` | A voice note could not be turned into text                     | `null`   |
-| `other`             | Anything else — e.g. the bot's output could not be sent, or its lead details could not be read | `null` |
+| `reason`            | Meaning                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| `customer_ready`    | The customer said yes (accepted a quoted price, or asked to book / be contacted) |
+| `bot_cannot_help`   | The bot decided a person should answer                         |
+| `reply_cap`         | The bot used up its replies for this conversation              |
+| `voice_note_failed` | A voice note could not be turned into text                     |
+| `other`             | Anything else — e.g. the bot's output could not be sent, or its lead details could not be read |
+
+`reason` alone says whether the customer said yes. `lead` is what the bot
+had collected at the handoff, for **any** reason: it is an object
+whenever the bot knew the service or had at least one answer, and `null`
+when it had collected nothing (or the details could not be read).
+`customer_ready` always comes with a `lead`.
 
 `lead.service` is one of `ac_cleaning`, `pest_control`,
 `kitchen_bathroom_cleaning`, `apartment_cleaning`, `villa_cleaning`,
