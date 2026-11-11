@@ -8,7 +8,7 @@ import {
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
-import { hasLeadBlock, parseLeadBlock, stripLeadBlocks } from './lead'
+import { hasLeadTag, maskLeadBlocks, parseLeadBlock } from './lead'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -65,19 +65,30 @@ export function parseGeneration(
   raw: string,
   usage: AiUsage | null = null,
 ): GenerateResult {
-  const { body, tail, tagged } = extractReply(raw)
+  // Lead blocks are swapped for a marker first, so text inside one can
+  // never pose as the reply or the handoff marker.
+  const masked = maskLeadBlocks(raw.split(LEAD_MARK).join(''), LEAD_MARK)
+  const { body, tail, tagged } = extractReply(masked)
   // With tags, only the reply itself or what follows it counts as a
   // handoff request. Reasoning before the tags can mention the markers
   // ("no need to emit [[HANDOFF]]") without meaning it.
-  const signals = tagged ? body + tail : raw
+  const signals = tagged ? body + tail : masked
   // A complete, valid lead block counts wherever the model put it (some
   // write it before the reply); a bare mention of the tag does not.
   const lead = parseLeadBlock(raw)
-  const leadBlock = hasLeadBlock(signals)
+  const leadBlock = signals.includes(LEAD_MARK) || hasLeadTag(signals)
   const handoff = signals.includes(HANDOFF_SENTINEL) || leadBlock || lead !== null
-  const text = stripLeadBlocks(body).split(HANDOFF_SENTINEL).join('').trim()
+  // A whole block inside the reply is cut out cleanly. Any other trace of
+  // a lead tag there (cut off, or broken by what a customer typed) means
+  // reply and data can't be told apart — so nothing is sent.
+  const reply = body.split(LEAD_MARK).join('')
+  const text = hasLeadTag(reply) ? '' : reply.split(HANDOFF_SENTINEL).join('').trim()
   return { text, handoff, lead, leadUnreadable: tagged && leadBlock && !lead, usage, tagged }
 }
+
+/** Stands in for a lead block while the output is parsed; never valid
+ *  in model output (stripped from it first). */
+const LEAD_MARK = '\u0000'
 
 /**
  * The prompt asks the model to wrap the customer-facing message in

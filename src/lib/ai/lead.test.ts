@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   LEAD_SERVICES,
-  hasLeadBlock,
+  hasLeadTag,
   parseLeadBlock,
-  stripLeadBlocks,
+  maskLeadBlocks,
   type HandoffLead,
 } from './lead'
 
@@ -63,18 +63,26 @@ describe('parseLeadBlock', () => {
   it('falls back to "other" for an unknown or missing service', () => {
     expect(parseLeadBlock(block({ ...LEAD, service: 'car_wash' }))?.service).toBe('other')
     expect(parseLeadBlock(block({ ...LEAD, service: null }))?.service).toBe('other')
-    expect(parseLeadBlock(block({}))?.service).toBe('other')
+    expect(parseLeadBlock(block({ customer_name: 'أحمد' }))?.service).toBe('other')
   })
 
-  it('fills every field of an empty object with its empty value', () => {
-    expect(parseLeadBlock(block({}))).toEqual({
-      service: 'other',
-      details: [],
-      quoted_price_sar: null,
-      customer_name: null,
-      area: null,
-      preferred_date: null,
-    })
+  it('does not take an object that says nothing for a lead', () => {
+    expect(parseLeadBlock(block({}))).toBeNull()
+    expect(
+      parseLeadBlock(
+        block({ service: null, details: [], quoted_price_sar: null, customer_name: null, area: '', preferred_date: null }),
+      ),
+    ).toBeNull()
+    // …but one fact is enough.
+    expect(parseLeadBlock(block({ service: 'pest_control' }))).toMatchObject({ service: 'pest_control', details: [] })
+  })
+
+  it('keeps a yes/no answer and never splits an emoji when cutting long text', () => {
+    const lead = parseLeadBlock(
+      block({ ...LEAD, details: [{ question: 'مفروشة؟', answer: true }], area: 'ا'.repeat(299) + '🙂🙂' }),
+    )
+    expect(lead?.details).toEqual([{ question: 'مفروشة؟', answer: 'true' }])
+    expect(lead?.area).toBe('ا'.repeat(299) + '🙂')
   })
 
   it('treats details that are not an array as none', () => {
@@ -111,7 +119,7 @@ describe('parseLeadBlock', () => {
     [-50, null],
     ['-50', null],
     ['abc', null],
-    ['300 SAR', null],
+    ['300 SAR', 300],
     [null, null],
     [true, null],
   ])('reads quoted_price_sar %j as %j', (given, expected) => {
@@ -166,51 +174,40 @@ describe('parseLeadBlock', () => {
   it.each([
     ['٣٠٠', 300],
     ['1,200', 1200],
-    ['300 ريال', null],
+    ['300 ريال', 300],
+    ['300-400', null],
   ])('reads a price typed as %s', (typed, expected) => {
     expect(parseLeadBlock(block({ ...LEAD, quoted_price_sar: typed }))?.quoted_price_sar).toBe(expected)
   })
+})
 
-  it('never lets a loosely tagged block through to customer-visible text', () => {
-    const json = JSON.stringify(LEAD)
-    for (const leaky of [`ok <lead >${json}</lead>`, `ok <LEAD>${json}</LEAD>`, `ok <Lead>${json}`]) {
-      expect(stripLeadBlocks(leaky).trim()).toBe('ok')
+describe('hasLeadTag', () => {
+  it('spots an opening or a closing tag, however sloppily written', () => {
+    for (const t of ['تم <lead>{', 'تم </lead>', '<LEAD>', '<lead >', '</ Lead >']) {
+      expect(hasLeadTag(t)).toBe(true)
     }
-    // …without eating ordinary words.
-    expect(stripLeadBlocks('<leader> stays')).toBe('<leader> stays')
+  })
+
+  it('leaves ordinary text and look-alike words alone', () => {
+    expect(hasLeadTag('تم، سيتواصل معك الفريق')).toBe(false)
+    expect(hasLeadTag('<leader> and <lead-in>')).toBe(false)
   })
 })
 
-describe('hasLeadBlock', () => {
-  it('is true for a complete or an unclosed block', () => {
-    expect(hasLeadBlock(`تم ${block(LEAD)}`)).toBe(true)
-    expect(hasLeadBlock('تم <lead>{"service":')).toBe(true)
+describe('maskLeadBlocks', () => {
+  it('swaps each complete block for the marker and keeps the text around it', () => {
+    expect(maskLeadBlocks(`قبل ${block(LEAD)} بعد <LEAD >${JSON.stringify(LEAD)}</lead>`, '§')).toBe('قبل § بعد §')
   })
 
-  it('is false without an opening tag', () => {
-    expect(hasLeadBlock('تم، سيتواصل معك الفريق')).toBe(false)
-    expect(hasLeadBlock('تم </lead>')).toBe(false)
-  })
-})
-
-describe('stripLeadBlocks', () => {
-  it('leaves text without a block untouched', () => {
-    expect(stripLeadBlocks('تم، سيتواصل معك الفريق')).toBe('تم، سيتواصل معك الفريق')
+  it('also masks a block it cannot read, so its position still counts', () => {
+    expect(maskLeadBlocks('تم <lead>{"service": </lead>', '§')).toBe('تم §')
   })
 
-  it('removes a complete block and keeps the text around it', () => {
-    expect(stripLeadBlocks(`قبل ${block(LEAD)} بعد`)).toBe('قبل  بعد')
+  it('drops a block that says nothing', () => {
+    expect(maskLeadBlocks(`أ<lead></lead>ب<lead>null</lead>ج${block({})}د`, '§')).toBe('أبجد')
   })
 
-  it('removes an unclosed block through to the end of the text', () => {
-    expect(stripLeadBlocks('قبل <lead>{"service": "ac_cleaning",\n"area": "الرياض')).toBe('قبل ')
-  })
-
-  it('removes every block when there are several', () => {
-    expect(stripLeadBlocks(`أ${block(LEAD)}ب${block({})}ج<lead>{"service":`)).toBe('أبج')
-  })
-
-  it('removes a stray closing tag', () => {
-    expect(stripLeadBlocks('قبل </lead> بعد')).toBe('قبل  بعد')
+  it('leaves a block that was never closed where it is', () => {
+    expect(maskLeadBlocks('قبل <lead>{"service":', '§')).toBe('قبل <lead>{"service":')
   })
 })

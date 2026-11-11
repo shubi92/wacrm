@@ -40,6 +40,10 @@ interface DispatchArgs {
   /** The account's WhatsApp config owner, used for the outbound send's
    *  audit columns (mirrors how the flow runner passes it through). */
   configOwnerUserId: string
+  /** The sender's WhatsApp number as Meta gives it (digits, country code
+   *  first) — reported on a handoff. `contacts.phone` is whatever a
+   *  person typed or imported, so it is only the fallback. */
+  fromPhone?: string
   /** Set when the inbound is a voice note (no typed text). The bot
    *  listens to it first, then answers the transcript like typed text. */
   voiceNote?: InboundVoiceNote
@@ -62,8 +66,10 @@ interface DispatchArgs {
  *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
  *
- * At the per-conversation reply cap the bot doesn't answer either, but
- * it isn't silent about it: the thread is handed to a person.
+ * At the per-conversation reply cap the bot sends no further answer,
+ * but it still reads the message: a customer saying yes right then is
+ * handed over with their details, and anything else is handed to a
+ * person instead of being met with silence.
  *
  * Every handoff — cap, voice note, the model's own, or a customer who
  * said yes (with lead details) — fires `conversation.handed_off` once.
@@ -120,20 +126,21 @@ export async function dispatchInboundToAiReply(
     // `othersActiveOnThread`). Checked again after generation, below.
     if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
 
-    const handoffBase = { accountId, contactId, conversationId, config, conv }
-
-    // Out of replies: stop, and tell a person instead of going quiet.
-    // (The authoritative cap check for sending is the atomic claim below;
-    // this read can only lag a concurrent inbound, never run ahead.)
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) {
-      const { notified } = await handOff(db, {
-        ...handoffBase,
-        reason: 'reply_cap',
-        summary: `🤖 AI agent handed off: it reached its limit of ${config.autoReplyMaxPerConversation} replies on this chat. Please take over.`,
-      })
-      await notified
-      return
+    const handoffBase = {
+      accountId,
+      contactId,
+      conversationId,
+      config,
+      conv,
+      fromPhone: args.fromPhone,
     }
+
+    // Out of replies. The bot may not answer again, but it still reads
+    // this message — it is often the "yes" to a price in its last reply —
+    // and then hands the thread to a person either way (below).
+    // (The authoritative cap check for sending is the atomic claim; this
+    // read can only lag a concurrent inbound, never run ahead.)
+    const atCap = conv.ai_reply_count >= config.autoReplyMaxPerConversation
 
     // Voice note: listen first. Deliberately AFTER every gate above, so a
     // customer's audio only leaves the system for a thread the bot may
@@ -221,21 +228,32 @@ export async function dispatchInboundToAiReply(
       )
     }
 
-    if (handoff || !text || !tagged) {
-      // The model can't (or shouldn't) answer — hand the thread to a
-      // human (see `handOff`). Only the winner sends the goodbye below.
+    if (handoff || !text || !tagged || atCap) {
+      // The model can't (or shouldn't, or may no longer) answer — hand
+      // the thread to a human (see `handOff`). Only the winner sends the
+      // goodbye below.
       // A customer who said yes carries lead details (`lead`); a lead
       // block we couldn't read degrades to a plain handoff, never a lost one.
+      // `capOnly`: a perfectly good reply the bot has no slot left to send.
+      const capOnly = atCap && !handoff && !!text && tagged
       const { won, notified } = await handOff(db, {
         ...handoffBase,
-        reason: lead ? 'customer_ready' : handoff && !leadUnreadable ? 'bot_cannot_help' : 'other',
+        reason: lead
+          ? 'customer_ready'
+          : capOnly
+            ? 'reply_cap'
+            : handoff && !leadUnreadable
+              ? 'bot_cannot_help'
+              : 'other',
         lead,
-        summary: buildHandoffSummary({
-          messages,
-          replyCount: conv.ai_reply_count ?? 0,
-          lead,
-          leadUnreadable,
-        }),
+        summary: capOnly
+          ? `🤖 AI agent handed off: it reached its limit of ${config.autoReplyMaxPerConversation} replies on this chat. Please take over.`
+          : buildHandoffSummary({
+              messages,
+              replyCount: conv.ai_reply_count ?? 0,
+              lead,
+              leadUnreadable,
+            }),
       })
 
       // A handoff can carry a short message for the customer ("a colleague
@@ -247,6 +265,7 @@ export async function dispatchInboundToAiReply(
         if (
           text &&
           tagged &&
+          handoff && // never the reply the cap just withheld
           won &&
           !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) &&
           (await contactPassesTestNumbers(db, accountId, contactId))
@@ -362,6 +381,7 @@ async function handOff(
     reason: HandoffReason
     summary: string
     lead?: HandoffLead | null
+    fromPhone?: string
   },
 ): Promise<{ won: boolean; notified: Promise<void> }> {
   const { config, conv, conversationId, summary } = args
@@ -383,7 +403,10 @@ async function handOff(
   guarded = conv.ai_resumed_at
     ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
     : guarded.is('ai_resumed_at', null)
-  const { data: rows } = await guarded.select('id')
+  const { data: rows, error } = await guarded.select('id')
+  // Without this a database failure would look exactly like losing the
+  // race: no pause, no event, and nothing to find it by.
+  if (error) console.error('[ai auto-reply] handoff update failed:', error)
   const won = (rows?.length ?? 0) > 0
   return { won, notified: won ? notifyHandoff(db, args) : Promise.resolve() }
 }
@@ -399,6 +422,7 @@ async function notifyHandoff(
     reason: HandoffReason
     summary: string
     lead?: HandoffLead | null
+    fromPhone?: string
   },
 ): Promise<void> {
   try {
@@ -412,8 +436,9 @@ async function notifyHandoff(
       conversation_id: args.conversationId,
       contact: {
         id: args.contactId,
-        // Digits only, country code first — as Meta gives it.
-        phone: String(contact?.phone ?? '').replace(/\D/g, ''),
+        // Digits only, country code first — Meta's own form of the
+        // number when we have it.
+        phone: String(args.fromPhone || contact?.phone || '').replace(/\D/g, ''),
         name: (contact?.name as string | null | undefined)?.trim() || null,
       },
       reason: args.reason,

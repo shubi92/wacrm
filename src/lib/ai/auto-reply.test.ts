@@ -146,6 +146,7 @@ vi.mock('./admin-client', () => ({
 }))
 
 import { dispatchInboundToAiReply } from './auto-reply'
+import { __resetRateLimitForTests } from '@/lib/rate-limit'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -170,6 +171,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 beforeEach(() => {
+  __resetRateLimitForTests()
   h.state.conv = {
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
@@ -271,7 +273,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when the per-conversation cap is reached', async () => {
+  it('sends no further reply once the per-conversation cap is reached', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: false,
@@ -279,7 +281,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toHaveLength(0)
   })
 
   describe('others already active on the thread', () => {
@@ -622,7 +624,6 @@ describe('dispatchInboundToAiReply — voice notes', () => {
   it.each([
     ['a human is assigned', { assigned_agent_id: 'agent-9', ai_autoreply_disabled: false, ai_reply_count: 0 }],
     ['the bot is paused on the thread', { assigned_agent_id: null, ai_autoreply_disabled: true, ai_reply_count: 0 }],
-    ['the reply cap is reached', { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }],
   ])('does not listen when %s', async (_label, conv) => {
     h.state.conv = conv
     await dispatchInboundToAiReply(VOICE)
@@ -747,10 +748,10 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     expect(String(event().summary)).toContain('no speech')
   })
 
-  it('at the reply cap: hands off to a person and reports reply_cap, without calling the model', async () => {
+  it('at the reply cap: withholds the reply, hands off to a person and reports reply_cap', async () => {
     h.state.conv = AT_CAP
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
-    await dispatchInboundToAiReply(ARGS)
+    await dispatchInboundToAiReply(ARGS) // the model answers "Hello!" as usual
     expect(h.state.updatePayload).toMatchObject({
       ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
@@ -758,8 +759,24 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('limit of 3 replies')
     expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
     expect(event()).toMatchObject({ reason: 'reply_cap', lead: null })
-    expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toHaveLength(0)
+  })
+
+  it('at the reply cap: a customer who says yes is still handed over with their details', async () => {
+    h.state.conv = AT_CAP
+    h.generateReply.mockResolvedValue({ text: 'تم', handoff: true, lead: LEAD, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'customer_ready', lead: LEAD })
+    expect(h.engineSendText.mock.calls.map((c) => c[0].text)).toEqual(['تم'])
+  })
+
+  it('reports the number WhatsApp gave, not however the contact was typed in', async () => {
+    h.state.contactPhone = '0501234567'
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, lead: null, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply({ ...ARGS, fromPhone: '966501234567' })
+    expect(event()).toMatchObject({ contact: { phone: '966501234567' } })
   })
 
   it('at the reply cap with a teammate already talking: stays out of it', async () => {
