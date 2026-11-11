@@ -3,12 +3,19 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildConversationContext } from './context'
 
 /** Minimal fake matching the query chain in buildConversationContext:
- *  from().select().eq().eq().order().limit() → { data, error }. */
+ *  from().select().eq().in().order().limit() → { data, error }. */
+const inFilters: [string, unknown[]][] = []
+
 function fakeDb(rows: unknown[]): SupabaseClient {
+  inFilters.length = 0
   const chain = {
     from: () => chain,
     select: () => chain,
     eq: () => chain,
+    in: (col: string, vals: unknown[]) => {
+      inFilters.push([col, vals])
+      return chain
+    },
     order: () => chain,
     limit: () => Promise.resolve({ data: rows, error: null }),
   }
@@ -49,5 +56,21 @@ describe('buildConversationContext', () => {
       'conv-1',
     )
     expect(out).toEqual([{ role: 'user', content: 'real' }])
+  })
+
+  it('reads voice notes too, and treats a transcribed one as customer text', async () => {
+    // Audio rows carry their transcript in content_text (newest first).
+    const rows = [
+      { sender_type: 'bot', content_text: null }, // the bot's own spoken reply
+      { sender_type: 'bot', content_text: 'السعر ٣٠٠ ريال' },
+      { sender_type: 'customer', content_text: 'كم سعر التأشيرة؟' }, // transcribed voice note
+      { sender_type: 'customer', content_text: null }, // voice note never transcribed
+    ]
+    const out = await buildConversationContext(fakeDb(rows), 'conv-1')
+    expect(inFilters).toEqual([['content_type', ['text', 'audio']]])
+    expect(out).toEqual([
+      { role: 'user', content: 'كم سعر التأشيرة؟' },
+      { role: 'assistant', content: 'السعر ٣٠٠ ريال' },
+    ])
   })
 })

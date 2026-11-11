@@ -172,6 +172,19 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           ) : (
             <MediaUnavailable label={t("audio")} t={t} />
           )}
+          {/* Voice-note transcript (stored in content_text, which audio
+              otherwise leaves empty). The label inherits the bubble's own
+              text colour, dimmed, so it reads on both muted and primary. */}
+          {message.content_text && (
+            <>
+              <p className="mt-1 text-[10px] font-medium uppercase tracking-wide opacity-70">
+                {t("transcript")}
+              </p>
+              <p dir="auto" className="whitespace-pre-wrap break-words text-sm">
+                {message.content_text}
+              </p>
+            </>
+          )}
         </div>
       );
 

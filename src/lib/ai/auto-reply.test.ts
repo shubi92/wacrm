@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
+  transcribeInboundVoiceNote: vi.fn(),
+  sendVoiceReply: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
@@ -31,6 +33,10 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
+vi.mock('./voice', () => ({
+  transcribeInboundVoiceNote: h.transcribeInboundVoiceNote,
+  sendVoiceReply: h.sendVoiceReply,
+}))
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
@@ -181,6 +187,10 @@ beforeEach(() => {
   h.retrieveKnowledge.mockResolvedValue([])
   h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true })
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
+  h.transcribeInboundVoiceNote.mockReset()
+  h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'ok', text: 'كم سعر التأشيرة؟' })
+  h.sendVoiceReply.mockReset()
+  h.sendVoiceReply.mockResolvedValue(undefined)
 })
 
 describe('dispatchInboundToAiReply — eligibility gates', () => {
@@ -507,5 +517,133 @@ describe('dispatchInboundToAiReply — test numbers', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — voice notes', () => {
+  const VOICE = {
+    ...ARGS,
+    voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.V1', accessToken: 'token' },
+  }
+
+  it('a typed message never touches the voice path', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.transcribeInboundVoiceNote).not.toHaveBeenCalled()
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+  })
+
+  it('a transcribed voice note reaches the bot like typed text, and is answered in text then voice', async () => {
+    const order: string[] = []
+    h.transcribeInboundVoiceNote.mockImplementation(async () => {
+      order.push('transcribe')
+      return { status: 'ok', text: 'كم سعر التأشيرة؟' }
+    })
+    h.buildConversationContext.mockImplementation(async () => {
+      order.push('context')
+      return [{ role: 'user', content: 'كم سعر التأشيرة؟' }]
+    })
+    h.engineSendText.mockImplementation(async () => {
+      order.push('text')
+      return { whatsapp_message_id: 'm1' }
+    })
+    h.sendVoiceReply.mockImplementation(async () => {
+      order.push('voice')
+    })
+
+    await dispatchInboundToAiReply(VOICE)
+
+    expect(h.transcribeInboundVoiceNote).toHaveBeenCalledWith(
+      expect.anything(),
+      { accountId: 'acct-1', conversationId: 'conv-1', voiceNote: VOICE.voiceNote },
+    )
+    expect(h.generateReply.mock.calls[0][0].messages).toEqual([
+      { role: 'user', content: 'كم سعر التأشيرة؟' },
+    ])
+    // Transcript is saved before the context is read; text goes out before audio.
+    expect(order).toEqual(['transcribe', 'context', 'text', 'voice'])
+    expect(h.sendVoiceReply).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
+    )
+    expect(h.state.updatePayload).toBeNull() // no handoff
+  })
+
+  it('hands off to a person when the voice note cannot be turned into text', async () => {
+    h.transcribeInboundVoiceNote.mockResolvedValue({
+      status: 'failed',
+      reason: 'the voice note is longer than 3 minutes.',
+    })
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+
+    await dispatchInboundToAiReply(VOICE)
+
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      assigned_agent_id: 'agent-7',
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('longer than 3 minutes')
+    // Same race guards as a model handoff.
+    expect(h.state.updateFilters).toEqual(
+      expect.arrayContaining([
+        ['ai_autoreply_disabled', false],
+        ['assigned_agent_id', null],
+      ]),
+    )
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+  })
+
+  it('stays silent, as before, when voice transcription is switched off', async () => {
+    h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'off' })
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('never sends audio out for a contact that is not a test number', async () => {
+    h.state.testNumbers = ['966511111111']
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.transcribeInboundVoiceNote).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a human is assigned', { assigned_agent_id: 'agent-9', ai_autoreply_disabled: false, ai_reply_count: 0 }],
+    ['the bot is paused on the thread', { assigned_agent_id: null, ai_autoreply_disabled: true, ai_reply_count: 0 }],
+    ['the reply cap is reached', { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }],
+  ])('does not listen when %s', async (_label, conv) => {
+    h.state.conv = conv
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.transcribeInboundVoiceNote).not.toHaveBeenCalled()
+  })
+
+  it('does not listen when a teammate is already talking to the customer', async () => {
+    h.state.messageRows = [
+      {
+        conversation_id: 'conv-1',
+        sender_type: 'agent',
+        ai_generated: false,
+        created_at: new Date().toISOString(),
+      },
+    ]
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.transcribeInboundVoiceNote).not.toHaveBeenCalled()
+  })
+
+  it('does not speak a handoff goodbye — text only', async () => {
+    h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true, tagged: true })
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+  })
+
+  it('does not speak when the text reply itself was not sent', async () => {
+    h.state.claim = false // lost the reply-cap race
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
   })
 })

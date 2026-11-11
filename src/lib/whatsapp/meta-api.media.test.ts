@@ -71,6 +71,24 @@ describe("sendMediaMessage — payload shape", () => {
     expect(captured?.audio).toEqual({ link: BASE.link });
   });
 
+  it("sends audio as a voice message when voice is true", async () => {
+    await sendMediaMessage({ ...BASE, kind: "audio", voice: true });
+    expect(captured?.type).toBe("audio");
+    expect(captured?.audio).toEqual({ link: BASE.link, voice: true });
+  });
+
+  it("leaves audio unchanged when voice is false or omitted", async () => {
+    await sendMediaMessage({ ...BASE, kind: "audio", voice: false });
+    expect(captured?.audio).toEqual({ link: BASE.link });
+  });
+
+  it("ignores voice for non-audio kinds", async () => {
+    await sendMediaMessage({ ...BASE, kind: "image", voice: true });
+    expect(captured?.image).toEqual({ link: BASE.link });
+    await sendMediaMessage({ ...BASE, kind: "document", voice: true, filename: "a.pdf" });
+    expect(captured?.document).toEqual({ link: BASE.link, filename: "a.pdf" });
+  });
+
   it("throws when no link is provided", async () => {
     await expect(
       sendMediaMessage({ ...BASE, link: "", kind: "image" }),

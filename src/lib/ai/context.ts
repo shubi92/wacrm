@@ -10,8 +10,12 @@ interface DbMessage {
 /**
  * Fetch the last N text messages of a conversation and map them to the
  * provider-neutral chat shape. Customer messages become `user`; agent
- * and bot messages become `assistant`. Non-text messages (media,
+ * and bot messages become `assistant`. Other non-text messages (media,
  * templates, interactive) are excluded — they carry no text to model.
+ *
+ * A voice note counts as text once it has been transcribed: the
+ * transcript lives in the audio row's `content_text`. Audio without one
+ * (not transcribed, or the bot's own spoken reply) drops out below.
  *
  * Ordered oldest-first (chronological) so the transcript reads
  * naturally and the most recent customer message lands last.
@@ -25,7 +29,7 @@ export async function buildConversationContext(
     .from('messages')
     .select('sender_type, content_text')
     .eq('conversation_id', conversationId)
-    .eq('content_type', 'text')
+    .in('content_type', ['text', 'audio'])
     .order('created_at', { ascending: false })
     .limit(limit)
 
