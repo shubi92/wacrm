@@ -79,6 +79,18 @@ export function AiConfig() {
   // the API means the database lacks migration 038, so the field is hidden.
   const [testNumbers, setTestNumbers] = useState('');
   const [testNumbersAvailable, setTestNumbersAvailable] = useState(false);
+  // Voice notes. `voice_available: false` from the API means the database
+  // lacks migration 039, so the whole card is hidden and nothing is sent.
+  const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const [voiceTranscription, setVoiceTranscription] = useState(false);
+  const [voiceReply, setVoiceReply] = useState(false);
+  const [geminiKey, setGeminiKey] = useState('');
+  const [geminiKeyEdited, setGeminiKeyEdited] = useState(false);
+  const [hasStoredGeminiKey, setHasStoredGeminiKey] = useState(false);
+  const [elevenLabsKey, setElevenLabsKey] = useState('');
+  const [elevenLabsKeyEdited, setElevenLabsKeyEdited] = useState(false);
+  const [hasStoredElevenLabsKey, setHasStoredElevenLabsKey] = useState(false);
+  const [voiceId, setVoiceId] = useState('');
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -92,6 +104,8 @@ export function AiConfig() {
     // (or belongs to a different account) a save must not write them back.
     setTestNumbersAvailable(false);
     setTestNumbers('');
+    // Same for voice notes: hidden (and not sent) until this load says so.
+    setVoiceAvailable(false);
     try {
       const res = await fetch('/api/ai/config');
       const data = await res.json();
@@ -107,6 +121,17 @@ export function AiConfig() {
           ? data.auto_reply_test_numbers.join('\n')
           : '',
       );
+      // Voice settings come back even before the first save, like test numbers.
+      setVoiceAvailable(data.voice_available === true);
+      setVoiceTranscription(data.voice_transcription_enabled === true);
+      setVoiceReply(data.voice_reply_enabled === true);
+      setVoiceId(data.elevenlabs_voice_id ?? '');
+      setHasStoredGeminiKey(Boolean(data.has_gemini_key));
+      setGeminiKey(data.has_gemini_key ? MASKED_KEY : '');
+      setGeminiKeyEdited(false);
+      setHasStoredElevenLabsKey(Boolean(data.has_elevenlabs_key));
+      setElevenLabsKey(data.has_elevenlabs_key ? MASKED_KEY : '');
+      setElevenLabsKeyEdited(false);
       if (data.configured) {
         setConfigured(true);
         setProvider(data.provider);
@@ -169,6 +194,19 @@ export function AiConfig() {
     handoff_agent_id: handoffAgentId || null,
     // Omitted when the database can't store it, so the save still succeeds.
     ...(testNumbersAvailable ? { auto_reply_test_numbers: testNumbers } : {}),
+    // Voice fields likewise. Keys follow the embeddings-key convention:
+    // undefined = leave unchanged; '' typed = null (clear); text = set.
+    ...(voiceAvailable
+      ? {
+          voice_transcription_enabled: voiceTranscription,
+          voice_reply_enabled: voiceTranscription && voiceReply,
+          gemini_api_key: geminiKeyEdited ? geminiKey.trim() || null : undefined,
+          elevenlabs_api_key: elevenLabsKeyEdited
+            ? elevenLabsKey.trim() || null
+            : undefined,
+          elevenlabs_voice_id: voiceId.trim() || null,
+        }
+      : {}),
   });
 
   const handleTest = async () => {
@@ -237,6 +275,16 @@ export function AiConfig() {
         setAutoReplyEnabled(false);
         setSystemPrompt('');
         setHandoffAgentId('');
+        // The voice keys lived on the removed row too.
+        setVoiceTranscription(false);
+        setVoiceReply(false);
+        setHasStoredGeminiKey(false);
+        setGeminiKey('');
+        setGeminiKeyEdited(false);
+        setHasStoredElevenLabsKey(false);
+        setElevenLabsKey('');
+        setElevenLabsKeyEdited(false);
+        setVoiceId('');
       } else {
         const data = await res.json();
         toast.error(data.error ?? t('removeFailed'));
@@ -521,6 +569,132 @@ export function AiConfig() {
             </div>
           </CardContent>
         </Card>
+
+        {voiceAvailable && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{t('voiceNotes')}</CardTitle>
+              <CardDescription>{t('voiceNotesDesc')}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    {t('voiceUnderstand')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('voiceUnderstandDesc')}
+                  </p>
+                </div>
+                <Switch
+                  checked={voiceTranscription}
+                  onCheckedChange={(on) => {
+                    setVoiceTranscription(on);
+                    // Voice replies can't work without listening.
+                    if (!on) setVoiceReply(false);
+                  }}
+                  disabled={disabled || !autoReplyEnabled}
+                  aria-label={t('voiceUnderstand')}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ai-gemini-key">{t('geminiKey')}</Label>
+                <Input
+                  id="ai-gemini-key"
+                  type="password"
+                  value={geminiKey}
+                  onChange={(e) => {
+                    setGeminiKey(e.target.value);
+                    setGeminiKeyEdited(true);
+                  }}
+                  onFocus={() => {
+                    if (!geminiKeyEdited && hasStoredGeminiKey) {
+                      setGeminiKey('');
+                      setGeminiKeyEdited(true);
+                    }
+                  }}
+                  // Clicking in and out without typing keeps the saved key.
+                  onBlur={() => {
+                    if (geminiKeyEdited && hasStoredGeminiKey && !geminiKey.trim()) {
+                      setGeminiKey(MASKED_KEY);
+                      setGeminiKeyEdited(false);
+                    }
+                  }}
+                  disabled={disabled}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('geminiKeyHint')}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    {t('voiceReply')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('voiceReplyDesc')}
+                  </p>
+                </div>
+                <Switch
+                  checked={voiceTranscription && voiceReply}
+                  onCheckedChange={setVoiceReply}
+                  disabled={disabled || !voiceTranscription}
+                  aria-label={t('voiceReply')}
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="ai-elevenlabs-key">{t('elevenLabsKey')}</Label>
+                  <Input
+                    id="ai-elevenlabs-key"
+                    type="password"
+                    value={elevenLabsKey}
+                    onChange={(e) => {
+                      setElevenLabsKey(e.target.value);
+                      setElevenLabsKeyEdited(true);
+                    }}
+                    onFocus={() => {
+                      if (!elevenLabsKeyEdited && hasStoredElevenLabsKey) {
+                        setElevenLabsKey('');
+                        setElevenLabsKeyEdited(true);
+                      }
+                    }}
+                    // Clicking in and out without typing keeps the saved key.
+                    onBlur={() => {
+                      if (elevenLabsKeyEdited && hasStoredElevenLabsKey && !elevenLabsKey.trim()) {
+                        setElevenLabsKey(MASKED_KEY);
+                        setElevenLabsKeyEdited(false);
+                      }
+                    }}
+                    disabled={disabled}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('elevenLabsKeyHint')}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ai-voice-id">{t('voiceId')}</Label>
+                  <Input
+                    id="ai-voice-id"
+                    dir="ltr"
+                    value={voiceId}
+                    onChange={(e) => setVoiceId(e.target.value)}
+                    disabled={disabled}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('voiceIdHint')}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <AiKnowledgeCard
           accountId={accountId}

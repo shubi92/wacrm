@@ -10,6 +10,12 @@ import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { isTestNumberAllowed } from './test-numbers'
+import {
+  sendVoiceReply,
+  transcribeInboundVoiceNote,
+  type InboundVoiceNote,
+} from './voice'
+import type { AiConfig } from './types'
 
 /** How long a human/system outbound keeps the bot quiet on a thread —
  *  matches WhatsApp's 24h customer-service window. */
@@ -23,6 +29,9 @@ interface DispatchArgs {
   /** The account's WhatsApp config owner, used for the outbound send's
    *  audit columns (mirrors how the flow runner passes it through). */
   configOwnerUserId: string
+  /** Set when the inbound is a voice note (no typed text). The bot
+   *  listens to it first, then answers the transcript like typed text. */
+  voiceNote?: InboundVoiceNote
 }
 
 /**
@@ -42,6 +51,11 @@ interface DispatchArgs {
  *   - a non-AI outbound message went to this thread in the last 24h
  *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
+ *
+ * A voice note passes the same gates, then is turned into text (only
+ * when the account switched that on — otherwise silence, as before). If
+ * it can't be understood the thread is handed to a person, never left
+ * unanswered.
  *
  * The 24h WhatsApp session window is inherently open here — we're
  * reacting to a customer message that just landed — so no separate
@@ -92,6 +106,30 @@ export async function dispatchInboundToAiReply(
     // Someone other than the bot is already talking to this customer (see
     // `othersActiveOnThread`). Checked again after generation, below.
     if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
+
+    // Voice note: listen first. Deliberately AFTER every gate above, so a
+    // customer's audio only leaves the system for a thread the bot may
+    // actually answer (test numbers included). The transcript is saved on
+    // the message, so the context below picks it up like typed text.
+    // ponytail: one Gemini call per eligible voice note, not covered by
+    // the account rate limit below; add a limiter if cost ever matters.
+    if (args.voiceNote) {
+      const heard = await transcribeInboundVoiceNote(db, {
+        accountId,
+        conversationId,
+        voiceNote: args.voiceNote,
+      })
+      if (heard.status === 'off') return
+      if (heard.status === 'failed') {
+        await handOff(db, {
+          config,
+          conv,
+          conversationId,
+          summary: `🤖 AI agent handed off: ${heard.reason} Please listen to it and reply.`,
+        })
+        return
+      }
+    }
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -156,41 +194,17 @@ export async function dispatchInboundToAiReply(
     }
 
     if (handoff || !text || !tagged) {
-      // The model can't (or shouldn't) answer — stop auto-replying on
-      // this thread and hand it to a human. We (a) pause the bot here
-      // (sticky until re-enabled), (b) route the conversation to the
-      // configured handoff agent — null leaves it in the shared queue —
-      // and (c) leave a short internal note so whoever picks it up has
-      // context. Assigning fires the `on_conversation_assigned` trigger,
-      // which notifies the agent.
-      const summary = buildHandoffSummary({
-        messages,
-        replyCount: conv.ai_reply_count ?? 0,
+      // The model can't (or shouldn't) answer — hand the thread to a
+      // human (see `handOff`). Only the winner sends the goodbye below.
+      const won = await handOff(db, {
+        config,
+        conv,
+        conversationId,
+        summary: buildHandoffSummary({
+          messages,
+          replyCount: conv.ai_reply_count ?? 0,
+        }),
       })
-      const update: Record<string, unknown> = {
-        ai_autoreply_disabled: true,
-        ai_handoff_summary: summary,
-      }
-      // Only set the assignee when a target is configured AND the thread
-      // isn't already owned — never stomp an existing human assignment.
-      if (config.handoffAgentId && !conv.assigned_agent_id) {
-        update.assigned_agent_id = config.handoffAgentId
-      }
-      // Guarded so a stale generation can't win: the thread must still be
-      // bot-owned exactly as it was when we read it — not paused (a racing
-      // handoff), not assigned to a human (someone took it over while the
-      // model was generating), and not resumed since (a newer "Resume AI").
-      // Only the winner sends the goodbye below.
-      let guarded = db
-        .from('conversations')
-        .update(update)
-        .eq('id', conversationId)
-        .eq('ai_autoreply_disabled', false)
-        .is('assigned_agent_id', null)
-      guarded = conv.ai_resumed_at
-        ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
-        : guarded.is('ai_resumed_at', null)
-      const { data: won } = await guarded.select('id')
 
       // A handoff can carry a short message for the customer ("a colleague
       // will contact you shortly"); without it they'd get silence. Sent
@@ -200,7 +214,7 @@ export async function dispatchInboundToAiReply(
       if (
         text &&
         tagged &&
-        (won?.length ?? 0) > 0 &&
+        won &&
         !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) &&
         (await contactPassesTestNumbers(db, accountId, contactId))
       ) {
@@ -263,9 +277,68 @@ export async function dispatchInboundToAiReply(
       text,
       aiGenerated: true,
     })
+
+    // They spoke, so answer in voice too — after the text, which is the
+    // part that must arrive. No-op unless voice replies are switched on;
+    // owns its errors.
+    if (args.voiceNote) {
+      await sendVoiceReply(db, {
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text,
+      })
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }
+}
+
+/**
+ * Stop auto-replying on this thread and hand it to a human: pause the
+ * bot here (sticky until re-enabled), route the conversation to the
+ * configured handoff agent — null leaves it in the shared queue — and
+ * leave a short internal note so whoever picks it up has context.
+ * Assigning fires the `on_conversation_assigned` trigger, which notifies
+ * the agent.
+ *
+ * Returns true only when this call won the handoff. The update is
+ * guarded so a stale generation can't win: the thread must still be
+ * bot-owned exactly as it was when we read it — not paused (a racing
+ * handoff), not assigned to a human (someone took it over meanwhile),
+ * and not resumed since (a newer "Resume AI").
+ */
+async function handOff(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: {
+    config: AiConfig
+    conv: { assigned_agent_id: string | null; ai_resumed_at?: string | null }
+    conversationId: string
+    summary: string
+  },
+): Promise<boolean> {
+  const { config, conv, conversationId, summary } = args
+  const update: Record<string, unknown> = {
+    ai_autoreply_disabled: true,
+    ai_handoff_summary: summary,
+  }
+  // Only set the assignee when a target is configured AND the thread
+  // isn't already owned — never stomp an existing human assignment.
+  if (config.handoffAgentId && !conv.assigned_agent_id) {
+    update.assigned_agent_id = config.handoffAgentId
+  }
+  let guarded = db
+    .from('conversations')
+    .update(update)
+    .eq('id', conversationId)
+    .eq('ai_autoreply_disabled', false)
+    .is('assigned_agent_id', null)
+  guarded = conv.ai_resumed_at
+    ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
+    : guarded.is('ai_resumed_at', null)
+  const { data: won } = await guarded.select('id')
+  return (won?.length ?? 0) > 0
 }
 
 /**

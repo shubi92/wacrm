@@ -272,6 +272,10 @@ export interface SendMediaMessageArgs {
   caption?: string
   /** Document-only. Shown in the recipient's chat as the file name. Ignored for image/video/audio. */
   filename?: string
+  /** Audio-only: send as a WhatsApp voice message (`audio.voice = true`)
+   *  instead of a basic audio message. Only set it for a mono Ogg/Opus
+   *  file. Ignored for image/video/document. */
+  voice?: boolean
   contextMessageId?: string
 }
 
@@ -283,14 +287,29 @@ export interface SendMediaMessageArgs {
  * throws on non-2xx, returns Meta's message id.
  *
  * Audio is special-cased: Meta rejects `caption` and `filename` on audio
- * messages, so we send `{ link }` only. WhatsApp auto-renders an
- * OGG/Opus file as a playable voice note (waveform) rather than a file
- * attachment.
+ * messages, so we send `{ link }` only, plus `voice: true` when asked.
+ *
+ * What Meta's audio-messages doc says (read 2026-11):
+ * - `voice`: "Set to true if sending a voice message. Voice messages must
+ *   be Ogg files encoded with the OPUS codec." Omitted or false = a "basic
+ *   audio message", shown with a download icon and a music icon instead of
+ *   the voice-note look (auto-download, profile picture, voice icon,
+ *   transcript).
+ * - OGG row of the formats table: "audio/ogg (OPUS codecs only; base
+ *   audio/ogg not supported; mono input only)", 16 MB max.
+ * - "The play icon will only appear if the file is 512KB or smaller";
+ *   bigger files show a download icon.
+ * - A wrong file type/codec makes "voice message transcription ... fail".
+ * - Meta's only `voice: true` example uses an uploaded media `id`; `link`
+ *   is documented as the hosted-media alternative ("not recommended") and
+ *   nothing forbids `voice` with it. BSP docs (360dialog) show
+ *   `{ link, voice: true }` working on the same Cloud API payload.
+ * - No minimum Graph API version is stated for `voice`.
  */
 export async function sendMediaMessage(
   args: SendMediaMessageArgs,
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, kind, link, caption, filename, contextMessageId } = args
+  const { phoneNumberId, accessToken, to, kind, link, caption, filename, voice, contextMessageId } = args
   if (!link) throw new Error('sendMediaMessage requires a link.')
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
 
@@ -300,6 +319,7 @@ export async function sendMediaMessage(
   const media: Record<string, unknown> = { link }
   if (caption && kind !== 'audio') media.caption = caption
   if (kind === 'document' && filename) media.filename = filename
+  if (kind === 'audio' && voice) media.voice = true
 
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',

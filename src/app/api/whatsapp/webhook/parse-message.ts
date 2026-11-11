@@ -1,4 +1,5 @@
 import { getMediaUrl } from '@/lib/whatsapp/meta-api'
+import type { InboundVoiceNote } from '@/lib/ai/voice'
 
 // Turns one inbound Meta message into what we store. Lives outside
 // route.ts because a route file may only export route handlers and
@@ -37,6 +38,22 @@ export interface WhatsAppMessage {
   button?: { text?: string; payload?: string }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
+}
+
+/**
+ * The voice note the AI auto-reply bot should listen to, when this
+ * inbound is an audio message. Typed text never yields one.
+ */
+export function inboundVoiceNote(
+  message: WhatsAppMessage,
+  accessToken: string
+): InboundVoiceNote | undefined {
+  if (message.type !== 'audio' || !message.audio?.id) return undefined
+  return {
+    mediaId: message.audio.id,
+    whatsappMessageId: message.id,
+    accessToken,
+  }
 }
 
 export async function parseMessageContent(

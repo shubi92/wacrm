@@ -1,7 +1,11 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { parseMessageContent, type WhatsAppMessage } from './parse-message'
+import {
+  inboundVoiceNote,
+  parseMessageContent,
+  type WhatsAppMessage,
+} from './parse-message'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
@@ -321,12 +325,26 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
   return ii > ci
 }
 
-async function handleStatusUpdate(status: {
+async function handleStatusUpdate(rawStatus: {
   id: string
   status: string
   timestamp: string
   recipient_id: string
 }) {
+  // Meta reports a voice message the customer listened to as "played"
+  // (since 2026-03). We don't track that separately — the CHECK on
+  // messages.status and the public webhook contract only know
+  // sent/delivered/read/failed. A played note was necessarily read, so
+  // just make sure the message shows as read; the "read" event itself
+  // already did the rest (broadcast mirror, webhook fan-out).
+  if (rawStatus.status === 'played') {
+    await supabaseAdmin()
+      .from('messages')
+      .update({ status: 'read' })
+      .eq('message_id', rawStatus.id)
+    return
+  }
+  const status = rawStatus
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status. No
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
@@ -773,17 +791,22 @@ async function processMessage(
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }
 
-  // AI auto-reply. Runs only for plain-text inbound the deterministic
-  // flow runner did NOT consume (flows win over the LLM), and only when
-  // the account has enabled it. Awaited inside `after()` (same reason as
+  // AI auto-reply. Runs only for plain-text inbound — or a voice note,
+  // which the bot turns into text first — that the deterministic flow
+  // runner did NOT consume (flows win over the LLM), and only when the
+  // account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
   // eligibility gates + try/catch and never throws.
-  if (!flowConsumed && !interactiveReplyId && inboundText.trim()) {
+  const voiceNote = inboundText.trim()
+    ? undefined
+    : inboundVoiceNote(message, accessToken)
+  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote)) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
       contactId: contactRecord.id,
       configOwnerUserId,
+      voiceNote,
     })
   }
 

@@ -216,7 +216,8 @@
       "interactiveReply": "[Interactive reply]",
       "unsupported": "[Unsupported message type]",
       "aiBadge": "AI",
-      "aiBadgeTitle": "Sent automatically by the AI assistant"
+      "aiBadgeTitle": "Sent automatically by the AI assistant",
+      "transcript": "Transcript"
     },
     "actions": {
       "reply": "Reply",
@@ -1660,6 +1661,18 @@
       "handoffQueue": "Unassigned queue (any agent can pick it up)",
       "testNumbers": "Test numbers only (optional)",
       "testNumbersDesc": "While you try the bot out, list phone numbers here, one per line. Auto-reply then answers only these numbers; everyone else is left to your team. Leave empty to let the bot reply to everyone.",
+      "voiceNotes": "Voice notes",
+      "voiceNotesDesc": "Let the assistant listen to voice notes from your customers, and answer them out loud.",
+      "voiceUnderstand": "Understand voice notes",
+      "voiceUnderstandDesc": "When a customer sends a voice note, the assistant turns it into text and answers it like a typed message. The text also appears under the voice note in the inbox. If a voice note can’t be understood, or is longer than 3 minutes, the chat is handed to a person instead.",
+      "geminiKey": "Google Gemini key",
+      "geminiKeyHint": "Needed to understand voice notes. To get one, open Google AI Studio and choose “Get API key”. Use a key from a project with billing switched on — Google may use audio sent with a free key to improve its products.",
+      "voiceReply": "Reply with a voice note too",
+      "voiceReplyDesc": "When the customer’s last message was a voice note, the assistant also sends its answer as a voice note. The same answer is always sent as text as well, so prices can be re-read. Typed messages get text only.",
+      "elevenLabsKey": "ElevenLabs key",
+      "elevenLabsKeyHint": "Needed only for voice replies. You create it in your ElevenLabs account.",
+      "voiceId": "Voice ID",
+      "voiceIdHint": "The voice the assistant speaks with. In ElevenLabs open Voices, pick a voice, and copy its Voice ID.",
       "remove": "Remove",
       "save": "Save",
       "missingModel": "Enter a model name.",

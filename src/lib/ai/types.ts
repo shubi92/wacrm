@@ -31,6 +31,15 @@ export interface AiConfig {
   embeddingsApiKey: string | null
 }
 
+/** Voice-note settings, decrypted. Everything off / null when not set up. */
+export interface VoiceConfig {
+  transcriptionEnabled: boolean
+  replyEnabled: boolean
+  geminiApiKey: string | null
+  elevenLabsApiKey: string | null
+  elevenLabsVoiceId: string | null
+}
+
 /** A single conversation turn in the shape both providers accept. */
 export interface ChatMessage {
   role: 'user' | 'assistant'

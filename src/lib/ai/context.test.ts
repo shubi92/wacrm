@@ -3,14 +3,32 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildConversationContext } from './context'
 
 /** Minimal fake matching the query chain in buildConversationContext:
- *  from().select().eq().eq().order().limit() → { data, error }. */
+ *  from().select().eq().in().not().order().limit() → { data, error }.
+ *  Rows default to content_type 'text'. */
+const inFilters: [string, unknown[]][] = []
+const notFilters: unknown[][] = []
+
 function fakeDb(rows: unknown[]): SupabaseClient {
+  inFilters.length = 0
+  notFilters.length = 0
   const chain = {
     from: () => chain,
     select: () => chain,
     eq: () => chain,
+    in: (col: string, vals: unknown[]) => {
+      inFilters.push([col, vals])
+      return chain
+    },
+    not: (...args: unknown[]) => {
+      notFilters.push(args)
+      return chain
+    },
     order: () => chain,
-    limit: () => Promise.resolve({ data: rows, error: null }),
+    limit: () =>
+      Promise.resolve({
+        data: (rows as Record<string, unknown>[]).map((r) => ({ content_type: 'text', ...r })),
+        error: null,
+      }),
   }
   return chain as unknown as SupabaseClient
 }
@@ -49,5 +67,25 @@ describe('buildConversationContext', () => {
       'conv-1',
     )
     expect(out).toEqual([{ role: 'user', content: 'real' }])
+  })
+
+  it('reads voice notes too, and treats a transcribed one as customer text', async () => {
+    // Audio rows carry their transcript in content_text (newest first).
+    const rows = [
+      // Outbound audio: any text on it never reached the customer.
+      { sender_type: 'agent', content_type: 'audio', content_text: 'caption Meta drops' },
+      { sender_type: 'bot', content_text: 'السعر ٣٠٠ ريال' },
+      // A transcribed customer voice note.
+      { sender_type: 'customer', content_type: 'audio', content_text: 'كم سعر التأشيرة؟' },
+    ]
+    const out = await buildConversationContext(fakeDb(rows), 'conv-1')
+    expect(inFilters).toEqual([['content_type', ['text', 'audio']]])
+    // Untranscribed voice notes are excluded in the query, so they can't
+    // crowd real messages out of the window.
+    expect(notFilters).toEqual([['content_text', 'is', null]])
+    expect(out).toEqual([
+      { role: 'user', content: 'كم سعر التأشيرة؟' },
+      { role: 'assistant', content: 'السعر ٣٠٠ ريال' },
+    ])
   })
 })

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import type { AiConfig } from './types'
+import type { AiConfig, VoiceConfig } from './types'
 
 interface AiConfigRow {
   provider: 'openai' | 'anthropic'
@@ -110,5 +110,78 @@ export async function loadEmbeddingsKey(
       `[ai config] embeddings key for account ${accountId} could not be decrypted — check ENCRYPTION_KEY.`,
     )
     return { key: null, corrupt: true }
+  }
+}
+
+const VOICE_OFF: VoiceConfig = {
+  transcriptionEnabled: false,
+  replyEnabled: false,
+  geminiApiKey: null,
+  elevenLabsApiKey: null,
+  elevenLabsVoiceId: null,
+}
+
+/**
+ * Read separately from loadAiConfig so the rest of AI keeps working on a
+ * database that hasn't run migration 039. NEVER throws: any read or decrypt
+ * failure returns the feature switched off (and logs a breadcrumb without the key).
+ */
+export async function loadVoiceConfig(
+  db: SupabaseClient,
+  accountId: string,
+): Promise<VoiceConfig> {
+  try {
+    const { data, error } = await db
+      .from('ai_configs')
+      .select(
+        'voice_transcription_enabled, voice_reply_enabled, gemini_api_key, elevenlabs_api_key, elevenlabs_voice_id',
+      )
+      .eq('account_id', accountId)
+      .maybeSingle()
+    // An error here is usually "column does not exist" (migration 039 not
+    // run) — the feature is simply off, so no log noise per inbound message.
+    if (error || !data) return { ...VOICE_OFF }
+
+    const decryptOrNull = (label: string, value: unknown): string | null => {
+      if (typeof value !== 'string' || !value) return null
+      try {
+        return decrypt(value)
+      } catch {
+        console.error(
+          `[ai config] ${label} key for account ${accountId} could not be decrypted — check ENCRYPTION_KEY; voice notes stay off until it is re-entered.`,
+        )
+        return null
+      }
+    }
+
+    const geminiApiKey = decryptOrNull('Gemini', data.gemini_api_key)
+    const elevenLabsApiKey = decryptOrNull('ElevenLabs', data.elevenlabs_api_key)
+    const elevenLabsVoiceId =
+      typeof data.elevenlabs_voice_id === 'string' && data.elevenlabs_voice_id.trim()
+        ? data.elevenlabs_voice_id.trim()
+        : null
+
+    // A switch only counts as on when what it needs is actually usable.
+    const transcriptionEnabled =
+      data.voice_transcription_enabled === true && !!geminiApiKey
+    const replyEnabled =
+      data.voice_reply_enabled === true &&
+      transcriptionEnabled &&
+      !!elevenLabsApiKey &&
+      !!elevenLabsVoiceId
+
+    return {
+      transcriptionEnabled,
+      replyEnabled,
+      geminiApiKey,
+      elevenLabsApiKey,
+      elevenLabsVoiceId,
+    }
+  } catch (err) {
+    console.error(
+      `[ai config] voice settings for account ${accountId} could not be read:`,
+      err instanceof Error ? err.message : err,
+    )
+    return { ...VOICE_OFF }
   }
 }

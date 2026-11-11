@@ -10,9 +10,22 @@ import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { parseTestNumbers } from '@/lib/ai/test-numbers'
+import { validateGeminiKey } from '@/lib/ai/providers/gemini'
+import { validateElevenLabsVoice } from '@/lib/ai/providers/elevenlabs'
 
 const MIGRATION_038_MISSING =
   'Test numbers need database migration 038 (ai_configs.auto_reply_test_numbers). Nothing was saved.'
+const MIGRATION_039_MISSING =
+  'Voice notes need database migration 039 (ai_configs voice columns). Nothing was saved.'
+
+const VOICE_COLUMNS =
+  'voice_transcription_enabled, voice_reply_enabled, gemini_api_key, elevenlabs_api_key, elevenlabs_voice_id'
+const VOICE_FIELDS = VOICE_COLUMNS.split(', ')
+
+// "<provider's message>. Nothing was saved." without doubling the full stop.
+function notSaved(prefix: string, message: string) {
+  return `${prefix}${message.replace(/[.\s]+$/, '')}. Nothing was saved.`
+}
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -60,8 +73,29 @@ export async function GET() {
       ? null
       : ((tn?.auto_reply_test_numbers as string[] | null) ?? [])
 
+    // Same idea for voice notes (migration 039): read alone, and
+    // `voice_available: false` hides the card when the columns are missing.
+    // The two keys are read only to derive the has_* flags.
+    const { data: vc, error: vcErr } = await supabase
+      .from('ai_configs')
+      .select(VOICE_COLUMNS)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    const voice = {
+      voice_available: !vcErr,
+      voice_transcription_enabled: vc?.voice_transcription_enabled === true,
+      voice_reply_enabled: vc?.voice_reply_enabled === true,
+      elevenlabs_voice_id: (vc?.elevenlabs_voice_id as string | null) ?? null,
+      has_gemini_key: !!vc?.gemini_api_key,
+      has_elevenlabs_key: !!vc?.elevenlabs_api_key,
+    }
+
     if (!data) {
-      return NextResponse.json({ configured: false, auto_reply_test_numbers: testNumbers })
+      return NextResponse.json({
+        configured: false,
+        auto_reply_test_numbers: testNumbers,
+        ...voice,
+      })
     }
     // The keys are selected only to derive the has_* flags; neither is
     // returned to the client.
@@ -72,6 +106,7 @@ export async function GET() {
       has_embeddings_key: !!embeddings_api_key,
       ...safe,
       auto_reply_test_numbers: testNumbers,
+      ...voice,
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -159,6 +194,112 @@ export async function POST(request: Request) {
         : ''
     const clearEmbeddingsKey = body.embeddings_api_key === null
 
+    // Voice notes (migration 039). Untouched unless the form sent a voice
+    // field, so an older form build — or a database without 039 — still
+    // saves. Keys follow the embeddings-key rule: text sets, null clears,
+    // absent leaves unchanged. Everything is checked BEFORE any write.
+    const voiceProvided = VOICE_FIELDS.some((f) => f in body)
+    const rawGeminiKey =
+      typeof body.gemini_api_key === 'string' ? body.gemini_api_key.trim() : ''
+    const rawElevenLabsKey =
+      typeof body.elevenlabs_api_key === 'string'
+        ? body.elevenlabs_api_key.trim()
+        : ''
+    const voiceWrite: Record<string, unknown> = {}
+    // Set when a new key / changed voice still has to be checked with ElevenLabs.
+    let elevenLabsCheck: { apiKey: string; voiceId: string } | null = null
+    if (voiceProvided) {
+      const { data: storedVoice, error: voiceErr } = await supabase
+        .from('ai_configs')
+        .select(VOICE_COLUMNS)
+        .eq('account_id', accountId)
+        .maybeSingle()
+      if (voiceErr) {
+        if (voiceErr.code === '42703') return bad(MIGRATION_039_MISSING)
+        console.error('[ai/config POST] voice read error:', voiceErr)
+        return NextResponse.json(
+          { error: 'Failed to save AI configuration' },
+          { status: 500 },
+        )
+      }
+
+      const transcriptionOn =
+        'voice_transcription_enabled' in body
+          ? body.voice_transcription_enabled === true
+          : storedVoice?.voice_transcription_enabled === true
+      const replyOn =
+        'voice_reply_enabled' in body
+          ? body.voice_reply_enabled === true
+          : storedVoice?.voice_reply_enabled === true
+      const storedVoiceId =
+        typeof storedVoice?.elevenlabs_voice_id === 'string'
+          ? storedVoice.elevenlabs_voice_id
+          : null
+      const voiceIdProvided = 'elevenlabs_voice_id' in body
+      const voiceId = voiceIdProvided
+        ? typeof body.elevenlabs_voice_id === 'string'
+          ? body.elevenlabs_voice_id.trim() || null
+          : null
+        : storedVoiceId
+      const clearGeminiKey = body.gemini_api_key === null
+      const clearElevenLabsKey = body.elevenlabs_api_key === null
+      const hasGeminiKey =
+        !!rawGeminiKey || (!clearGeminiKey && !!storedVoice?.gemini_api_key)
+      const storedElevenLabsKey =
+        !clearElevenLabsKey && typeof storedVoice?.elevenlabs_api_key === 'string'
+          ? storedVoice.elevenlabs_api_key
+          : ''
+      const hasElevenLabsKey = !!rawElevenLabsKey || !!storedElevenLabsKey
+
+      if (transcriptionOn && !hasGeminiKey) {
+        return bad(
+          'To understand voice notes, add your Google Gemini key first. Nothing was saved.',
+        )
+      }
+      if (replyOn && !transcriptionOn) {
+        return bad(
+          'Voice replies only work when "Understand voice notes" is switched on. Nothing was saved.',
+        )
+      }
+      if (replyOn && !hasElevenLabsKey) {
+        return bad(
+          'To reply with voice notes, add your ElevenLabs key first. Nothing was saved.',
+        )
+      }
+      if (replyOn && !voiceId) {
+        return bad(
+          'To reply with voice notes, add a Voice ID first. Nothing was saved.',
+        )
+      }
+
+      // A new key is checked together with the voice. A key pasted before a
+      // voice is chosen (replies are necessarily off then) is stored as-is
+      // and checked once the voice id arrives — that's the second branch.
+      if (voiceId && rawElevenLabsKey) {
+        elevenLabsCheck = { apiKey: rawElevenLabsKey, voiceId }
+      } else if (voiceId && voiceId !== storedVoiceId && storedElevenLabsKey) {
+        try {
+          // Decrypted only to make the check below; never logged or returned.
+          elevenLabsCheck = { apiKey: decrypt(storedElevenLabsKey), voiceId }
+        } catch {
+          return bad(
+            'The saved ElevenLabs key could not be read — enter it again. Nothing was saved.',
+          )
+        }
+      }
+
+      voiceWrite.voice_transcription_enabled = transcriptionOn
+      voiceWrite.voice_reply_enabled = replyOn
+      if (voiceIdProvided) voiceWrite.elevenlabs_voice_id = voiceId
+      if (rawGeminiKey) voiceWrite.gemini_api_key = encrypt(rawGeminiKey)
+      else if (clearGeminiKey) voiceWrite.gemini_api_key = null
+      if (rawElevenLabsKey) {
+        voiceWrite.elevenlabs_api_key = encrypt(rawElevenLabsKey)
+      } else if (clearElevenLabsKey) {
+        voiceWrite.elevenlabs_api_key = null
+      }
+    }
+
     // Reuse the stored key when the form didn't send a fresh one.
     const { data: existing } = await supabase
       .from('ai_configs')
@@ -231,6 +372,36 @@ export async function POST(request: Request) {
       }
     }
 
+    // Same "verify before save" for the two voice keys.
+    if (rawGeminiKey) {
+      try {
+        await validateGeminiKey(rawGeminiKey)
+      } catch (err) {
+        if (err instanceof AiError) {
+          return NextResponse.json(
+            { error: notSaved('Gemini key: ', err.message), code: err.code },
+            { status: 400 },
+          )
+        }
+        console.error('[ai/config POST] Gemini validation error:', err)
+        return bad('Could not check the Google Gemini key. Nothing was saved.')
+      }
+    }
+    if (elevenLabsCheck) {
+      try {
+        await validateElevenLabsVoice(elevenLabsCheck)
+      } catch (err) {
+        if (err instanceof AiError) {
+          return NextResponse.json(
+            { error: notSaved('ElevenLabs: ', err.message), code: err.code },
+            { status: 400 },
+          )
+        }
+        console.error('[ai/config POST] ElevenLabs validation error:', err)
+        return bad('Could not check the ElevenLabs key and voice. Nothing was saved.')
+      }
+    }
+
     const encryptedKey = rawKey ? encrypt(rawKey) : null
     const shared: Record<string, unknown> = {
       provider,
@@ -252,6 +423,8 @@ export async function POST(request: Request) {
     } else if (clearEmbeddingsKey) {
       shared.embeddings_api_key = null
     }
+    // Empty unless the form sent voice fields (see above).
+    Object.assign(shared, voiceWrite)
 
     if (existing) {
       const { error: upErr } = await supabase
@@ -261,6 +434,7 @@ export async function POST(request: Request) {
       if (upErr) {
         console.error('[ai/config POST] update error:', upErr)
         if (testNumbersProvided && upErr.code === '42703') return bad(MIGRATION_038_MISSING)
+        if (voiceProvided && upErr.code === '42703') return bad(MIGRATION_039_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
@@ -276,6 +450,7 @@ export async function POST(request: Request) {
       if (insErr) {
         console.error('[ai/config POST] insert error:', insErr)
         if (testNumbersProvided && insErr.code === '42703') return bad(MIGRATION_038_MISSING)
+        if (voiceProvided && insErr.code === '42703') return bad(MIGRATION_039_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
