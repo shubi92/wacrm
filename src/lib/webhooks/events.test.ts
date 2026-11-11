@@ -29,6 +29,11 @@ describe('normalizeEvents', () => {
     ).toEqual(['message.received', 'conversation.created']);
   });
 
+  it('accepts conversation.handed_off', () => {
+    expect(isWebhookEvent('conversation.handed_off')).toBe(true);
+    expect(normalizeEvents(['conversation.handed_off'])).toEqual(['conversation.handed_off']);
+  });
+
   it('rejects an unknown event', () => {
     expect(normalizeEvents(['message.received', 'nope'])).toBeNull();
   });

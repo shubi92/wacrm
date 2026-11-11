@@ -11,6 +11,9 @@ interface Turn {
   content: string;
   /** assistant-only: the agent signalled a human handoff on this turn. */
   handoff?: boolean;
+  /** assistant-only: the details the bot would pass on for a customer
+   *  who said yes (see `HandoffLead`). */
+  lead?: Record<string, unknown> | null;
 }
 
 export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
@@ -61,6 +64,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
               ? data.reply
               : '',
           handoff: Boolean(data.handoff),
+          lead: data.lead ?? null,
         },
       ]);
     } catch {
@@ -154,6 +158,14 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
                   <UserCircle2 className="h-3.5 w-3.5" />
                   Would hand off to a human here
                 </p>
+              )}
+              {t.role === 'assistant' && t.lead && (
+                <pre
+                  dir="auto"
+                  className="mt-1.5 whitespace-pre-wrap border-t border-border/50 pt-1.5 text-xs text-muted-foreground"
+                >
+                  {`Customer is ready. Details passed on:\n${JSON.stringify(t.lead, null, 2)}`}
+                </pre>
               )}
             </div>
             {t.role === 'user' && (

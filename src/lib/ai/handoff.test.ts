@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildHandoffSummary } from './handoff'
+import type { HandoffLead } from './lead'
 
 describe('buildHandoffSummary', () => {
   it('notes the reply count and quotes the last customer message', () => {
@@ -62,5 +63,59 @@ describe('buildHandoffSummary', () => {
       replyCount: 0,
     })
     expect(summary).toBe('🤖 AI agent handed off without replying.')
+  })
+})
+
+describe('buildHandoffSummary — ready customer', () => {
+  const messages = [{ role: 'user' as const, content: 'نعم، احجزوا لي' }]
+  const lead: HandoffLead = {
+    service: 'kitchen_bathroom_cleaning',
+    details: [{ question: 'كم عدد دورات المياه؟', answer: '٢' }],
+    quoted_price_sar: 300,
+    customer_name: 'أحمد',
+    area: 'الرياض - حي النرجس',
+    preferred_date: 'يوم الخميس',
+  }
+
+  it('leads the note with the service, quoted price, name, area and date', () => {
+    expect(buildHandoffSummary({ messages, replyCount: 2, lead })).toBe(
+      '🤖 AI agent handed off after 2 replies. Customer is ready: kitchen bathroom cleaning, quoted 300 SAR, أحمد, الرياض - حي النرجس, يوم الخميس. Last customer message: “نعم، احجزوا لي”',
+    )
+  })
+
+  it('omits null fields cleanly', () => {
+    const summary = buildHandoffSummary({
+      messages,
+      replyCount: 1,
+      lead: { ...lead, quoted_price_sar: null, customer_name: null, preferred_date: null },
+    })
+    expect(summary).toBe(
+      '🤖 AI agent handed off after 1 reply. Customer is ready: kitchen bathroom cleaning, الرياض - حي النرجس. Last customer message: “نعم، احجزوا لي”',
+    )
+    expect(summary).not.toContain('null')
+    expect(summary).not.toContain('quoted')
+    expect(summary).not.toMatch(/,\s*,/)
+  })
+
+  it('names just the service when nothing else is known', () => {
+    const summary = buildHandoffSummary({
+      messages: [],
+      replyCount: 1,
+      lead: { ...lead, quoted_price_sar: null, customer_name: null, area: null, preferred_date: null },
+    })
+    expect(summary).toBe('🤖 AI agent handed off after 1 reply. Customer is ready: kitchen bathroom cleaning.')
+  })
+
+  it('says the details could not be read when the lead was unreadable', () => {
+    const summary = buildHandoffSummary({ messages, replyCount: 1, lead: null, leadUnreadable: true })
+    expect(summary).toContain('could not be read')
+    expect(summary).not.toContain('Customer is ready')
+    expect(summary).toContain('Last customer message: “نعم، احجزوا لي”')
+  })
+
+  it('leaves the note unchanged when there is no lead and nothing unreadable', () => {
+    const plain = '🤖 AI agent handed off after 2 replies. Last customer message: “نعم، احجزوا لي”'
+    expect(buildHandoffSummary({ messages, replyCount: 2 })).toBe(plain)
+    expect(buildHandoffSummary({ messages, replyCount: 2, lead: null, leadUnreadable: false })).toBe(plain)
   })
 })

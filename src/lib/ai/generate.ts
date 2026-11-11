@@ -8,6 +8,7 @@ import {
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
+import { hasLeadBlock, parseLeadBlock, stripLeadBlocks } from './lead'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -52,11 +53,13 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
 }
 
 /**
- * Split the raw model output into `{ text, handoff, usage }`. The
+ * Split the raw model output into `{ text, handoff, lead, … }`. The
  * sentinel can appear alone or trailing a partial reply; either way we
  * treat the turn as a handoff and strip the marker from any remaining
- * text. `usage` is passed straight through (null when the provider
- * didn't report it).
+ * text. A `<lead>` block (see `./lead`) marks a customer who said yes:
+ * it is a handoff too, with or without the sentinel, and is never part
+ * of the customer-visible text. `usage` is passed straight through (null
+ * when the provider didn't report it).
  */
 export function parseGeneration(
   raw: string,
@@ -64,13 +67,16 @@ export function parseGeneration(
 ): GenerateResult {
   const { body, tail, tagged } = extractReply(raw)
   // With tags, only the reply itself or what follows it counts as a
-  // handoff request. Reasoning before the tags can mention the marker
+  // handoff request. Reasoning before the tags can mention the markers
   // ("no need to emit [[HANDOFF]]") without meaning it.
-  const handoff = tagged
-    ? body.includes(HANDOFF_SENTINEL) || tail.includes(HANDOFF_SENTINEL)
-    : raw.includes(HANDOFF_SENTINEL)
-  const text = body.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, usage, tagged }
+  const signals = tagged ? body + tail : raw
+  // A complete, valid lead block counts wherever the model put it (some
+  // write it before the reply); a bare mention of the tag does not.
+  const lead = parseLeadBlock(raw)
+  const leadBlock = hasLeadBlock(signals)
+  const handoff = signals.includes(HANDOFF_SENTINEL) || leadBlock || lead !== null
+  const text = stripLeadBlocks(body).split(HANDOFF_SENTINEL).join('').trim()
+  return { text, handoff, lead, leadUnreadable: tagged && leadBlock && !lead, usage, tagged }
 }
 
 /**

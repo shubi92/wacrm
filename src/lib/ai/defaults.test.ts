@@ -1,0 +1,33 @@
+import { describe, it, expect } from 'vitest'
+import { buildSystemPrompt } from './defaults'
+import { LEAD_SERVICES } from './lead'
+
+const USER_PROMPT = 'We are Al-Waha home services in Riyadh.'
+
+describe('buildSystemPrompt — ready customers', () => {
+  it('teaches the <lead> block and lists every service in auto-reply mode', () => {
+    const prompt = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(prompt).toContain('<lead>')
+    for (const service of LEAD_SERVICES) expect(prompt).toContain(service)
+  })
+
+  it('does not mention the <lead> block in draft mode', () => {
+    const prompt = buildSystemPrompt({ userPrompt: USER_PROMPT, mode: 'draft' })
+    expect(prompt).not.toContain('<lead>')
+    expect(prompt).not.toContain('Ready customers')
+  })
+
+  it("puts the account's own instructions after the ready-customer paragraph", () => {
+    const prompt = buildSystemPrompt({ userPrompt: USER_PROMPT, mode: 'auto_reply' })
+    const ready = prompt.indexOf('Ready customers')
+    expect(ready).toBeGreaterThan(-1)
+    expect(prompt.lastIndexOf('<lead>')).toBeGreaterThan(ready)
+    expect(prompt.indexOf(USER_PROMPT)).toBeGreaterThan(prompt.lastIndexOf('<lead>'))
+  })
+
+  it('carries only the mechanism, no per-service question script', () => {
+    const prompt = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(prompt).not.toMatch(/split/i)
+    expect(prompt).not.toMatch(/btu/i)
+  })
+})

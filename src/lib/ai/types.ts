@@ -1,3 +1,4 @@
+import type { HandoffLead } from './lead'
 // ============================================================
 // Shared types for the AI reply assistant (bring-your-own-key).
 //
@@ -69,6 +70,12 @@ export interface GenerateResult {
   text: string
   /** True when the model asked to hand off to a human (auto-reply mode). */
   handoff: boolean
+  /** Structured details of a customer who said yes (auto-reply mode);
+   *  null for every other turn. Implies `handoff`. */
+  lead: HandoffLead | null
+  /** The model wrote a lead block that could not be read — the customer
+   *  probably said yes, but the turn is handled as a plain handoff. */
+  leadUnreadable: boolean
   /** Provider token usage for this call, or null when unavailable. */
   usage: AiUsage | null
   /**

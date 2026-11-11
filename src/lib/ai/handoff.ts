@@ -1,4 +1,5 @@
 import type { ChatMessage } from './types'
+import type { HandoffLead } from './lead'
 
 /** Longest the quoted customer message runs before we ellipsize it —
  *  keeps the internal note to a glanceable one-liner. */
@@ -20,8 +21,13 @@ const MAX_QUOTE_LEN = 160
 export function buildHandoffSummary(args: {
   messages: ChatMessage[]
   replyCount: number
+  /** Set when the customer said yes — the note then leads with it, so
+   *  the details survive in the inbox even if a webhook delivery fails. */
+  lead?: HandoffLead | null
+  /** The bot wrote lead details that could not be read. */
+  leadUnreadable?: boolean
 }): string {
-  const { messages, replyCount } = args
+  const { messages, replyCount, lead, leadUnreadable } = args
 
   const lastCustomer = [...messages]
     .reverse()
@@ -32,7 +38,19 @@ export function buildHandoffSummary(args: {
       ? 'without replying'
       : `after ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`
 
-  const base = `🤖 AI agent handed off ${replies}.`
+  let base = `🤖 AI agent handed off ${replies}.`
+  if (lead) {
+    const facts = [
+      lead.service.replace(/_/g, ' '),
+      lead.quoted_price_sar !== null && `quoted ${lead.quoted_price_sar} SAR`,
+      lead.customer_name,
+      lead.area,
+      lead.preferred_date,
+    ].filter(Boolean)
+    base += ` Customer is ready: ${facts.join(', ')}.`
+  } else if (leadUnreadable) {
+    base += ' The customer looks ready to book, but the details could not be read — please check the chat.'
+  }
 
   if (!lastCustomer) return base
 

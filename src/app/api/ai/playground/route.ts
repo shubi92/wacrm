@@ -84,7 +84,7 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff, tagged } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff, lead, tagged } = await generateReply({ config, systemPrompt, messages })
     // Same disposition as the live bot (auto-reply.ts): only a complete
     // <reply> block is ever sent, and empty/untagged output hands off. The
     // customer-facing `reply` is what a real customer would receive, so it
@@ -95,6 +95,8 @@ export async function POST(request: Request) {
       reply: wouldSend,
       handoff: handoff || !text || !tagged,
       untagged: !tagged,
+      // What the live bot would report for a customer who said yes.
+      lead,
     })
   } catch (err) {
     if (err instanceof AiError) {

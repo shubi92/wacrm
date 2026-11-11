@@ -15,7 +15,18 @@ import {
   transcribeInboundVoiceNote,
   type InboundVoiceNote,
 } from './voice'
+import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import type { HandoffLead } from './lead'
 import type { AiConfig } from './types'
+
+/** Why the bot handed a thread to a person — `data.reason` of the
+ *  `conversation.handed_off` webhook (public contract). */
+type HandoffReason =
+  | 'customer_ready'
+  | 'bot_cannot_help'
+  | 'reply_cap'
+  | 'voice_note_failed'
+  | 'other'
 
 /** How long a human/system outbound keeps the bot quiet on a thread —
  *  matches WhatsApp's 24h customer-service window. */
@@ -47,10 +58,15 @@ interface DispatchArgs {
  *   - the account set test numbers and this contact isn't one of them
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
- *   - the per-conversation reply cap is reached
  *   - a non-AI outbound message went to this thread in the last 24h
  *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
+ *
+ * At the per-conversation reply cap the bot doesn't answer either, but
+ * it isn't silent about it: the thread is handed to a person.
+ *
+ * Every handoff — cap, voice note, the model's own, or a customer who
+ * said yes (with lead details) — fires `conversation.handed_off` once.
  *
  * A voice note passes the same gates, then is turned into text (only
  * when the account switched that on — otherwise silence, as before). If
@@ -99,13 +115,25 @@ export async function dispatchInboundToAiReply(
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
     if (conv.ai_autoreply_disabled) return // handed off / turned off here
-    // Cheap early-out; the authoritative cap check is the atomic claim
-    // below (this read can race a concurrent inbound).
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
 
     // Someone other than the bot is already talking to this customer (see
     // `othersActiveOnThread`). Checked again after generation, below.
     if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
+
+    const handoffBase = { accountId, contactId, conversationId, config, conv }
+
+    // Out of replies: stop, and tell a person instead of going quiet.
+    // (The authoritative cap check for sending is the atomic claim below;
+    // this read can only lag a concurrent inbound, never run ahead.)
+    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) {
+      const { notified } = await handOff(db, {
+        ...handoffBase,
+        reason: 'reply_cap',
+        summary: `🤖 AI agent handed off: it reached its limit of ${config.autoReplyMaxPerConversation} replies on this chat. Please take over.`,
+      })
+      await notified
+      return
+    }
 
     // Voice note: listen first. Deliberately AFTER every gate above, so a
     // customer's audio only leaves the system for a thread the bot may
@@ -121,12 +149,12 @@ export async function dispatchInboundToAiReply(
       })
       if (heard.status === 'off') return
       if (heard.status === 'failed') {
-        await handOff(db, {
-          config,
-          conv,
-          conversationId,
+        const { notified } = await handOff(db, {
+          ...handoffBase,
+          reason: 'voice_note_failed',
           summary: `🤖 AI agent handed off: ${heard.reason} Please listen to it and reply.`,
         })
+        await notified
         return
       }
     }
@@ -164,7 +192,7 @@ export async function dispatchInboundToAiReply(
       knowledge,
     })
 
-    const { text, handoff, usage, tagged } = await generateReply({
+    const { text, handoff, lead, leadUnreadable, usage, tagged } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -196,13 +224,17 @@ export async function dispatchInboundToAiReply(
     if (handoff || !text || !tagged) {
       // The model can't (or shouldn't) answer — hand the thread to a
       // human (see `handOff`). Only the winner sends the goodbye below.
-      const won = await handOff(db, {
-        config,
-        conv,
-        conversationId,
+      // A customer who said yes carries lead details (`lead`); a lead
+      // block we couldn't read degrades to a plain handoff, never a lost one.
+      const { won, notified } = await handOff(db, {
+        ...handoffBase,
+        reason: lead ? 'customer_ready' : handoff && !leadUnreadable ? 'bot_cannot_help' : 'other',
+        lead,
         summary: buildHandoffSummary({
           messages,
           replyCount: conv.ai_reply_count ?? 0,
+          lead,
+          leadUnreadable,
         }),
       })
 
@@ -211,21 +243,27 @@ export async function dispatchInboundToAiReply(
       // after the handoff is recorded, and skipped if a human replied while
       // the model was generating — they're already talking to the customer.
       // Untagged output is never sent (see above).
-      if (
-        text &&
-        tagged &&
-        won &&
-        !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) &&
-        (await contactPassesTestNumbers(db, accountId, contactId))
-      ) {
-        await engineSendText({
-          accountId,
-          userId: configOwnerUserId,
-          conversationId,
-          contactId,
-          text,
-          aiGenerated: true,
-        })
+      try {
+        if (
+          text &&
+          tagged &&
+          won &&
+          !(await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) &&
+          (await contactPassesTestNumbers(db, accountId, contactId))
+        ) {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text,
+            aiGenerated: true,
+          })
+        }
+      } finally {
+        // The webhook went out alongside the goodbye, so a slow receiver
+        // can't delay the customer; wait for it before `after()` ends.
+        await notified
       }
       return
     }
@@ -303,21 +341,29 @@ export async function dispatchInboundToAiReply(
  * Assigning fires the `on_conversation_assigned` trigger, which notifies
  * the agent.
  *
- * Returns true only when this call won the handoff. The update is
+ * `won` is true only when this call won the handoff. The update is
  * guarded so a stale generation can't win: the thread must still be
  * bot-owned exactly as it was when we read it — not paused (a racing
  * handoff), not assigned to a human (someone took it over meanwhile),
  * and not resumed since (a newer "Resume AI").
+ *
+ * The winner — and only the winner, so once per handoff — also fires
+ * the `conversation.handed_off` webhook. `notified` settles when that
+ * delivery is done and never rejects; await it before returning.
  */
 async function handOff(
   db: ReturnType<typeof supabaseAdmin>,
   args: {
+    accountId: string
+    contactId: string
     config: AiConfig
     conv: { assigned_agent_id: string | null; ai_resumed_at?: string | null }
     conversationId: string
+    reason: HandoffReason
     summary: string
+    lead?: HandoffLead | null
   },
-): Promise<boolean> {
+): Promise<{ won: boolean; notified: Promise<void> }> {
   const { config, conv, conversationId, summary } = args
   const update: Record<string, unknown> = {
     ai_autoreply_disabled: true,
@@ -337,8 +383,48 @@ async function handOff(
   guarded = conv.ai_resumed_at
     ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
     : guarded.is('ai_resumed_at', null)
-  const { data: won } = await guarded.select('id')
-  return (won?.length ?? 0) > 0
+  const { data: rows } = await guarded.select('id')
+  const won = (rows?.length ?? 0) > 0
+  return { won, notified: won ? notifyHandoff(db, args) : Promise.resolve() }
+}
+
+/** Tell subscribed systems (e.g. the business's CRM) about a handoff.
+ *  Best-effort; never rejects. */
+async function notifyHandoff(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: {
+    accountId: string
+    contactId: string
+    conversationId: string
+    reason: HandoffReason
+    summary: string
+    lead?: HandoffLead | null
+  },
+): Promise<void> {
+  try {
+    const handedOffAt = new Date().toISOString()
+    const { data: contact } = await db
+      .from('contacts')
+      .select('phone, name')
+      .eq('id', args.contactId)
+      .maybeSingle()
+    await dispatchWebhookEvent(db, args.accountId, 'conversation.handed_off', {
+      conversation_id: args.conversationId,
+      contact: {
+        id: args.contactId,
+        // Digits only, country code first — as Meta gives it.
+        phone: String(contact?.phone ?? '').replace(/\D/g, ''),
+        name: (contact?.name as string | null | undefined)?.trim() || null,
+      },
+      reason: args.reason,
+      summary: args.summary,
+      handed_off_at: handedOffAt,
+      // Lead details only ever travel with a customer who said yes.
+      lead: args.reason === 'customer_ready' ? (args.lead ?? null) : null,
+    })
+  } catch (err) {
+    console.error('[ai auto-reply] handoff webhook failed:', err)
+  }
 }
 
 /**

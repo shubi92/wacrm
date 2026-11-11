@@ -1,4 +1,5 @@
 import type { AiProvider } from './types'
+import { LEAD_SERVICES } from './lead'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -22,9 +23,11 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
  */
 export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 
-/** Cap on generated reply length — keeps WhatsApp replies short and
- *  bounds token spend on the caller's own key. */
-export const MAX_OUTPUT_TOKENS = 1024
+/** Cap on generated output — bounds token spend on the caller's own
+ *  key. Sized for a short WhatsApp reply plus a ready-customer <lead>
+ *  block (Arabic details are token-heavy); a block cut off by this cap
+ *  is lost and the turn degrades to a plain handoff. */
+export const MAX_OUTPUT_TOKENS = 2048
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
@@ -69,6 +72,19 @@ export function buildSystemPrompt(args: {
   if (mode === 'auto_reply') {
     parts.push(
       `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — hand off: write one short, polite message telling the customer a team member will follow up, and end it with ${HANDOFF_SENTINEL} (inside the reply tags). (Reply with only ${HANDOFF_SENTINEL} to hand off without messaging the customer.) A human agent will then take over. Prefer handing off over guessing.`,
+    )
+    // The mechanism only. WHAT to ask for each service lives in the
+    // account's own instructions (appended below), not in code.
+    parts.push(
+      'Ready customers. A customer is "ready" only once they have clearly said yes: they accept a price you quoted, or — for a service you cannot price — they confirm they want to book or want a team member to contact them. Questions alone are never a yes. ' +
+        'If the business instructions below list questions to ask for a service, ask them before treating the customer as ready. ' +
+        `When a customer is ready, hand off exactly as described above (a short message ending with ${HANDOFF_SENTINEL} inside the reply tags) and then, AFTER the closing </reply> tag, add one block <lead>{...}</lead> holding a single JSON object with exactly these keys: ` +
+        `"service" (one of: ${LEAD_SERVICES.join(', ')}), ` +
+        '"details" (a list of {"question": "...", "answer": "..."} pairs: each thing you asked or the business instructions required, with the customer\'s answer, in the customer\'s own language), ' +
+        '"quoted_price_sar" (the price in SAR you actually quoted in this conversation, as a number, or null if you quoted none), ' +
+        '"customer_name", "area" (the city / district as the customer said it) and "preferred_date" (as the customer said it). ' +
+        'Use null for anything the customer did not say — never guess or invent a value. ' +
+        'The <lead> block is read by software and never shown to the customer: never put it inside the reply tags, and never write one unless the customer is ready.',
     )
   }
 
