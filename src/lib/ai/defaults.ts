@@ -23,6 +23,18 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
  */
 export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 
+/** Highest "max auto-replies per conversation" an account may set. The
+ *  database enforces the same range (migration 040) — change both. */
+export const MAX_AUTO_REPLIES_CEILING = 30
+
+/** What the settings form sent → a whole number from 1 to the ceiling
+ *  (3, the default, when it isn't a number at all). */
+export function clampMaxAutoReplies(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 3
+  return Math.min(MAX_AUTO_REPLIES_CEILING, Math.max(1, Math.floor(n)))
+}
+
 /** Cap on generated output — bounds token spend on the caller's own
  *  key. Sized for a short WhatsApp reply plus a ready-customer <lead>
  *  block (Arabic details are token-heavy); a block cut off by this cap
