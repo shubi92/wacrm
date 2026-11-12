@@ -49,3 +49,12 @@ describe('buildSystemPrompt — lead block on any handoff', () => {
     expect(prompt).toContain('in every other handoff "ready" is false')
   })
 })
+
+describe('buildSystemPrompt — a handoff always carries a message', () => {
+  it('no longer offers a wordless handoff (a bare marker outside the tags reads as a silent pause)', () => {
+    const prompt = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(prompt).not.toContain('Reply with only')
+    expect(prompt).not.toContain('without messaging the customer')
+    expect(prompt).toContain('write one short, polite message')
+  })
+})

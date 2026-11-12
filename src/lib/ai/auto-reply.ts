@@ -200,7 +200,7 @@ export async function dispatchInboundToAiReply(
       resumed: !!conv.ai_resumed_at,
     })
 
-    const { text, handoff, lead, ready, leadUnreadable, usage, tagged } = await generateReply({
+    const { text, handoff, lead, ready, leadUnreadable, usage, tagged, raw, retried } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -222,10 +222,12 @@ export async function dispatchInboundToAiReply(
 
     // Only a complete <reply> block is safe to send: untagged output (or a
     // block cut off by the token limit) may carry the model's reasoning.
-    // Treat it like a handoff — a human answers instead — and never send it.
-    if (!tagged && text && !handoff) {
+    // `generateReply` already asked the model a second time; what is still
+    // unusable is treated like a handoff — a human answers instead — and
+    // never sent.
+    if (!handoff && (!tagged || !text)) {
       console.warn(
-        `[ai auto-reply] untagged model output on conversation ${conversationId} — handing off instead of sending it.`,
+        `[ai auto-reply] unsendable model output on conversation ${conversationId}${retried ? ' (after a second try)' : ''} — handing off instead of sending it.`,
       )
     }
 
@@ -256,7 +258,7 @@ export async function dispatchInboundToAiReply(
               lead,
               ready,
               leadUnreadable,
-              unsendable: !handoff,
+              unsendable: handoff ? undefined : { raw, retried },
             }),
       })
 

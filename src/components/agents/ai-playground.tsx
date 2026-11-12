@@ -15,6 +15,10 @@ interface Turn {
    *  handoff (see `HandoffLead`), and whether the customer said yes. */
   lead?: Record<string, unknown> | null;
   ready?: boolean;
+  /** assistant-only, on a handoff: whether the model asked for it (or
+   *  its answer just couldn't be sent), and what it actually wrote. */
+  choseHandoff?: boolean;
+  raw?: string | null;
 }
 
 export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
@@ -67,6 +71,8 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
           handoff: Boolean(data.handoff),
           lead: data.lead ?? null,
           ready: Boolean(data.ready),
+          choseHandoff: Boolean(data.chose_handoff),
+          raw: typeof data.raw === 'string' ? data.raw : null,
         },
       ]);
     } catch {
@@ -159,7 +165,16 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
                 >
                   <UserCircle2 className="h-3.5 w-3.5" />
                   Would hand off to a human here
+                  {t.choseHandoff
+                    ? ' — the bot chose to'
+                    : ' — its answer could not be sent'}
                 </p>
+              )}
+              {t.role === 'assistant' && t.raw && (
+                <details className="mt-1.5 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">What the model actually wrote</summary>
+                  <pre dir="auto" className="mt-1 whitespace-pre-wrap">{t.raw}</pre>
+                </details>
               )}
               {t.role === 'assistant' && t.lead && (
                 <pre
