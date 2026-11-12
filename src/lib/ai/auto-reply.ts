@@ -4,7 +4,12 @@ import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
-import { buildHandoffSummary, handoffFallbackMessage } from './handoff'
+import {
+  buildHandoffSummary,
+  handoffFallbackMessage,
+  isReplyCapSummary,
+  replyCapSummary,
+} from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
@@ -31,6 +36,14 @@ type HandoffReason =
 /** How long a human/system outbound keeps the bot quiet on a thread —
  *  matches WhatsApp's 24h customer-service window. */
 const HUMAN_ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/** How long a chat must be quiet — nothing sent to the customer by the
+ *  bot, a teammate, a Flow or the API — before the bot starts over on
+ *  it (see `startOverIfQuiet`). */
+const QUIET_RESET_MS = 24 * 60 * 60 * 1000
+
+const CONV_COLUMNS =
+  'assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at, ai_handoff_summary'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -65,6 +78,10 @@ interface DispatchArgs {
  *   - a non-AI outbound message went to this thread in the last 24h
  *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
+ *
+ * A chat that has been quiet for a day starts over first: a fresh reply
+ * budget, and a pause that only the reply cap caused is lifted (see
+ * `startOverIfQuiet`).
  *
  * At the per-conversation reply cap the bot sends no further answer,
  * but it still reads the message: a customer saying yes right then is
@@ -113,13 +130,17 @@ export async function dispatchInboundToAiReply(
       .limit(1)
     if (autoResponders && autoResponders.length > 0) return
 
-    const { data: conv, error: convErr } = await db
-      .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at')
-      .eq('id', conversationId)
-      .maybeSingle()
+    const readConv = () =>
+      db.from('conversations').select(CONV_COLUMNS).eq('id', conversationId).maybeSingle()
+    let { data: conv, error: convErr } = await readConv()
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
+    if (await startOverIfQuiet(db, conversationId, conv)) {
+      // Re-read rather than assume: another inbound, or a person, may
+      // have changed the thread in the same instant.
+      ;({ data: conv, error: convErr } = await readConv())
+      if (convErr || !conv || conv.assigned_agent_id) return
+    }
     if (conv.ai_autoreply_disabled) return // handed off / turned off here
 
     // Someone other than the bot is already talking to this customer (see
@@ -251,7 +272,7 @@ export async function dispatchInboundToAiReply(
               : 'other',
         lead,
         summary: capOnly
-          ? `🤖 AI agent handed off: it reached its limit of ${config.autoReplyMaxPerConversation} replies on this chat. Please take over.`
+          ? replyCapSummary(config.autoReplyMaxPerConversation)
           : buildHandoffSummary({
               messages,
               replyCount: conv.ai_reply_count ?? 0,
@@ -458,6 +479,77 @@ async function notifyHandoff(
   } catch (err) {
     console.error('[ai auto-reply] handoff webhook failed:', err)
   }
+}
+
+/**
+ * A chat that has been quiet for a day starts over. The customer who
+ * comes back gets a fresh reply budget, and a pause that only the reply
+ * cap caused is lifted — otherwise the cap would be for life, since a
+ * contact keeps one conversation forever.
+ *
+ * "Quiet" = nothing was sent to the customer on this chat in the last
+ * 24h: not by the bot (its goodbye included), a teammate, a Flow or the
+ * API. The customer's own messages don't count, so writing again while
+ * waiting never keeps the bot locked out.
+ *
+ * Left alone: a thread a human is assigned to (the caller returns
+ * before this), and a thread paused for any other reason — by a person,
+ * or by a handoff the cap didn't cause. Those stay with the team.
+ *
+ * Returns true when a start-over was attempted; the caller re-reads the
+ * thread. The update is compare-and-swap on `ai_resumed_at`, which it
+ * also sets: of several inbounds arriving together only one starts the
+ * chat over, and nothing can do so again for 24h. So, with the atomic
+ * slot claim, a chat gets at most one fresh budget per quiet day.
+ */
+async function startOverIfQuiet(
+  db: ReturnType<typeof supabaseAdmin>,
+  conversationId: string,
+  conv: {
+    ai_autoreply_disabled: boolean
+    ai_reply_count: number
+    ai_resumed_at?: string | null
+    ai_handoff_summary?: string | null
+  },
+): Promise<boolean> {
+  const nothingToReset = conv.ai_autoreply_disabled
+    ? !isReplyCapSummary(conv.ai_handoff_summary)
+    : !conv.ai_reply_count
+  if (nothingToReset) return false
+
+  // Taken BEFORE the quiet check and written as the new `ai_resumed_at`,
+  // so a teammate's reply landing after the check still counts as
+  // "someone else is talking" for the reply being generated.
+  const now = Date.now()
+  const quietSince = now - QUIET_RESET_MS
+  if (conv.ai_resumed_at && Date.parse(conv.ai_resumed_at) > quietSince) return false
+
+  const { data: recent, error } = await db
+    .from('messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['agent', 'bot'])
+    .gte('created_at', new Date(quietSince).toISOString())
+    .limit(1)
+  if (error || (recent?.length ?? 0) > 0) return false
+
+  let guarded = db
+    .from('conversations')
+    .update({
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_summary: null,
+      ai_resumed_at: new Date(now).toISOString(),
+    })
+    .eq('id', conversationId)
+    .eq('ai_autoreply_disabled', conv.ai_autoreply_disabled)
+    .is('assigned_agent_id', null)
+  guarded = conv.ai_resumed_at
+    ? guarded.eq('ai_resumed_at', conv.ai_resumed_at)
+    : guarded.is('ai_resumed_at', null)
+  const { error: resetErr } = await guarded.select('id')
+  if (resetErr) console.error('[ai auto-reply] quiet-day reset failed:', resetErr)
+  return true
 }
 
 /**

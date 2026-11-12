@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildHandoffSummary, handoffFallbackMessage } from './handoff'
+import { buildHandoffSummary, handoffFallbackMessage, isReplyCapSummary, replyCapSummary } from './handoff'
 import type { HandoffLead } from './lead'
 
 describe('buildHandoffSummary', () => {
@@ -156,5 +156,17 @@ describe('buildHandoffSummary — unusable output', () => {
     const note = buildHandoffSummary({ messages, replyCount: 0, unsendable: { raw: 'x'.repeat(900), retried: false } })
     expect(note).not.toContain('second try')
     expect(note.length).toBeLessThan(450)
+  })
+})
+
+describe('the reply-cap note', () => {
+  it('is recognised whatever the limit was, and nothing else is', () => {
+    expect(replyCapSummary(8)).toBe(
+      '🤖 AI agent handed off: it reached its limit of 8 replies on this chat. Please take over.',
+    )
+    expect(isReplyCapSummary(replyCapSummary(8))).toBe(true)
+    expect(isReplyCapSummary(replyCapSummary(20))).toBe(true)
+    expect(isReplyCapSummary(buildHandoffSummary({ messages: [], replyCount: 8 }))).toBe(false)
+    expect(isReplyCapSummary(null)).toBe(false)
   })
 })

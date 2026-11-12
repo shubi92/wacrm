@@ -18,6 +18,24 @@ export function handoffFallbackMessage(lastCustomerText: string): string {
     : 'Your request has been passed to our team and they will contact you shortly.'
 }
 
+const REPLY_CAP_NOTE = '🤖 AI agent handed off: it reached its limit of '
+
+/** The internal note for a handoff that only the reply cap caused. */
+export function replyCapSummary(maxReplies: number): string {
+  return `${REPLY_CAP_NOTE}${maxReplies} replies on this chat. Please take over.`
+}
+
+/**
+ * True when a conversation's handoff note is the reply cap's — the one
+ * pause the bot lifts by itself after a quiet day.
+ * ponytail: recognised by its note, which only the bot writes and only
+ * "Resume AI" clears. Add an `ai_handoff_reason` column when a second
+ * handoff reason needs its own automatic behaviour.
+ */
+export function isReplyCapSummary(summary: string | null | undefined): boolean {
+  return !!summary?.startsWith(REPLY_CAP_NOTE)
+}
+
 /**
  * Build the short internal note the auto-reply bot leaves on a
  * conversation when it hands off to a human. Deterministic — composed
