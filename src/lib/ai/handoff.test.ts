@@ -13,7 +13,7 @@ describe('buildHandoffSummary', () => {
       replyCount: 2,
     })
     expect(summary).toBe(
-      '🤖 AI agent handed off after 2 replies. Last customer message: “I want a refund”',
+      '🤖 AI agent handed off after 2 replies. The bot chose to hand off. Last customer message: “I want a refund”',
     )
   })
 
@@ -53,8 +53,8 @@ describe('buildHandoffSummary', () => {
       replyCount: 0,
     })
     expect(summary).toContain('…')
-    // 160-char cap on the quote; the whole note stays well under 250.
-    expect(summary.length).toBeLessThan(250)
+    // 160-char cap on the quote; the whole note stays well under 300.
+    expect(summary.length).toBeLessThan(300)
   })
 
   it('degrades gracefully when there is no customer message', () => {
@@ -62,7 +62,7 @@ describe('buildHandoffSummary', () => {
       messages: [{ role: 'assistant', content: 'greeting' }],
       replyCount: 0,
     })
-    expect(summary).toBe('🤖 AI agent handed off without replying.')
+    expect(summary).toBe('🤖 AI agent handed off without replying. The bot chose to hand off.')
   })
 })
 
@@ -121,8 +121,8 @@ describe('buildHandoffSummary — ready customer', () => {
     expect(summary).toContain('Last customer message: “نعم، احجزوا لي”')
   })
 
-  it('leaves the note unchanged when there is no lead and nothing unreadable', () => {
-    const plain = '🤖 AI agent handed off after 2 replies. Last customer message: “نعم، احجزوا لي”'
+  it('a plain handoff says the bot chose it', () => {
+    const plain = '🤖 AI agent handed off after 2 replies. The bot chose to hand off. Last customer message: “نعم، احجزوا لي”'
     expect(buildHandoffSummary({ messages, replyCount: 2 })).toBe(plain)
     expect(buildHandoffSummary({ messages, replyCount: 2, lead: null, leadUnreadable: false })).toBe(plain)
   })
@@ -138,9 +138,23 @@ describe('handoffFallbackMessage', () => {
 })
 
 describe('buildHandoffSummary — unusable output', () => {
-  it('says the bot did not choose the handoff', () => {
-    const note = buildHandoffSummary({ messages: [{ role: 'user', content: 'hi' }], replyCount: 0, unsendable: true })
-    expect(note).toContain('did not choose this')
-    expect(note).toContain('Last customer message')
+  const messages = [{ role: 'user' as const, content: 'وش الخدمات اللي عندكم؟' }]
+
+  it('says the bot did not choose the handoff, and quotes what it wrote', () => {
+    const note = buildHandoffSummary({
+      messages,
+      replyCount: 2,
+      unsendable: { raw: 'عندنا تنظيف\nالمكيفات', retried: true },
+    })
+    expect(note).toBe(
+      '🤖 AI agent handed off after 2 replies. The bot did not choose this: its answer could not be sent (no complete <reply> block), even on a second try. It wrote: “عندنا تنظيف المكيفات” Last customer message: “وش الخدمات اللي عندكم؟”',
+    )
+    expect(note).not.toContain('chose to hand off')
+  })
+
+  it('keeps a long answer to a short excerpt, and does not claim a second try that never ran', () => {
+    const note = buildHandoffSummary({ messages, replyCount: 0, unsendable: { raw: 'x'.repeat(900), retried: false } })
+    expect(note).not.toContain('second try')
+    expect(note.length).toBeLessThan(450)
   })
 })

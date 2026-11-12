@@ -463,6 +463,8 @@ describe('dispatchInboundToAiReply — handoff', () => {
       text: 'Customer asks the price; per the rules… السعر ٢٧٦',
       handoff: false,
       tagged: false,
+      raw: 'Customer asks the price; per the rules… السعر ٢٧٦',
+      retried: true,
     })
     await dispatchInboundToAiReply(ARGS)
     expect(sentTexts()).toEqual([EN_LINE]) // the standard line, never the untagged text
@@ -771,11 +773,26 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
   })
 
   it('output that cannot be sent (untagged) reports other', async () => {
-    h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: null, leadUnreadable: false, tagged: false })
+    h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: null, leadUnreadable: false, tagged: false, raw: 'x', retried: true })
     await dispatchInboundToAiReply(ARGS)
     expect(event()).toMatchObject({ reason: 'other', lead: null })
     expect(sentTexts()).toEqual([EN_LINE])
-    expect(h.state.updatePayload?.ai_handoff_summary).toContain('did not choose this')
+    // The owner can see it was a fault, that a second try ran, and what was written.
+    const note = String(h.state.updatePayload?.ai_handoff_summary)
+    expect(note).toContain('did not choose this')
+    expect(note).toContain('even on a second try')
+    expect(note).toContain('It wrote: “x”')
+  })
+
+  it('a bare [[HANDOFF]] is reported as the bot\'s own choice, and the customer still gets the standard line', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'وش الخدمات اللي عندكم؟' }])
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, lead: null, leadUnreadable: false, tagged: false, raw: '[[HANDOFF]]', retried: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(event()).toMatchObject({ reason: 'bot_cannot_help', lead: null })
+    expect(sentTexts()).toEqual([AR_LINE])
+    const note = String(h.state.updatePayload?.ai_handoff_summary)
+    expect(note).toContain('The bot chose to hand off.')
+    expect(note).not.toContain('did not choose this')
   })
 
   it('reports voice_note_failed when a voice note cannot be understood', async () => {

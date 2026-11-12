@@ -42,9 +42,9 @@ export function buildHandoffSummary(args: {
   /** The bot wrote lead details that could not be read. */
   leadUnreadable?: boolean
   /** The model did not ask to hand off — its answer just wasn't in a
-   *  form that may be sent. Said in the note, since it means a fault,
-   *  not a decision. */
-  unsendable?: boolean
+   *  form that may be sent. The note says so and quotes what it wrote,
+   *  since that is a fault to look into, not a decision. */
+  unsendable?: { raw: string; retried: boolean }
 }): string {
   const { messages, replyCount, lead, ready, leadUnreadable, unsendable } = args
 
@@ -70,7 +70,11 @@ export function buildHandoffSummary(args: {
   } else if (leadUnreadable) {
     base += ' The bot tried to pass on what it collected, but the details could not be read — please check the chat.'
   } else if (unsendable) {
-    base += ' The bot did not choose this: its answer was empty or not in a form that can be sent.'
+    base +=
+      ` The bot did not choose this: its answer could not be sent (no complete <reply> block)${unsendable.retried ? ', even on a second try' : ''}.` +
+      ` It wrote: “${truncate(unsendable.raw, MAX_QUOTE_LEN)}”`
+  } else {
+    base += ' The bot chose to hand off.'
   }
 
   if (!lastCustomer) return base

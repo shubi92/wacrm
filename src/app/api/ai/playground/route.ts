@@ -85,7 +85,7 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff, lead, ready, tagged } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff, lead, ready, tagged, raw, retried } = await generateReply({ config, systemPrompt, messages })
     // Same disposition as the live bot (auto-reply.ts): only a complete
     // <reply> block is ever sent, and empty/untagged output hands off —
     // with the standard hand-off line in place of the unusable text, which
@@ -96,7 +96,14 @@ export async function POST(request: Request) {
     return NextResponse.json({
       reply: wouldSend,
       handoff: handsOff,
+      // No complete <reply> block. Also true for a bare [[HANDOFF]] —
+      // `chose_handoff` tells a decision from a formatting fault.
       untagged: !tagged,
+      chose_handoff: handoff,
+      retried,
+      // What the model actually wrote, whenever that is not simply the
+      // reply above — so a handoff can be explained without guessing.
+      raw: handsOff ? raw : null,
       // What the live bot would pass on with this handoff, and whether
       // it counts the customer as having said yes.
       lead: handsOff ? lead : null,

@@ -86,6 +86,12 @@ export interface GenerateResult {
    * a block cut off by the token limit) may contain the model's reasoning.
    */
   tagged: boolean
+  /** The model's output exactly as it came. For diagnostics only (the
+   *  handoff note, the Playground) — never for a customer. */
+  raw: string
+  /** The first answer could not be sent and was not a handoff, so the
+   *  model was asked once more; this is the outcome of that. */
+  retried: boolean
 }
 
 /**

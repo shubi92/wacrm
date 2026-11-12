@@ -74,7 +74,7 @@ export function buildSystemPrompt(args: {
 
   if (mode === 'auto_reply') {
     parts.push(
-      `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — hand off: write one short, polite message telling the customer a team member will follow up, and end it with ${HANDOFF_SENTINEL} (inside the reply tags). (Reply with only ${HANDOFF_SENTINEL} to hand off without messaging the customer.) A human agent will then take over. Prefer handing off over guessing.`,
+      `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — hand off: write one short, polite message telling the customer a team member will follow up, and end it with ${HANDOFF_SENTINEL} (inside the reply tags, like every message you write). A human agent will then take over. Prefer handing off over guessing.`,
     )
     // The mechanism only. WHAT to ask for each service lives in the
     // account's own instructions (appended below), not in code.
