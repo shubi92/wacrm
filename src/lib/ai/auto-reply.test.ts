@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   engineSendText: vi.fn(),
   transcribeInboundVoiceNote: vi.fn(),
   sendVoiceReply: vi.fn(),
+  dispatchWebhookEvent: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
@@ -25,6 +26,7 @@ const h = vi.hoisted(() => ({
     testNumbers: null as string[] | null,
     testNumbersError: null as { message: string } | null,
     contactPhone: '966500000000' as string | null,
+    contactName: 'Sara' as string | null,
   },
 }))
 
@@ -37,6 +39,9 @@ vi.mock('./voice', () => ({
   transcribeInboundVoiceNote: h.transcribeInboundVoiceNote,
   sendVoiceReply: h.sendVoiceReply,
 }))
+vi.mock('@/lib/webhooks/deliver', () => ({
+  dispatchWebhookEvent: h.dispatchWebhookEvent,
+}))
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
@@ -45,7 +50,7 @@ vi.mock('./admin-client', () => ({
         const row =
           table === 'ai_configs'
             ? { auto_reply_test_numbers: h.state.testNumbers }
-            : { phone: h.state.contactPhone }
+            : { phone: h.state.contactPhone, name: h.state.contactName }
         const error = table === 'ai_configs' ? h.state.testNumbersError : null
         const chain = {
           select: () => chain,
@@ -141,6 +146,7 @@ vi.mock('./admin-client', () => ({
 }))
 
 import { dispatchInboundToAiReply } from './auto-reply'
+import { __resetRateLimitForTests } from '@/lib/rate-limit'
 
 const ARGS = {
   accountId: 'acct-1',
@@ -148,6 +154,11 @@ const ARGS = {
   contactId: 'contact-1',
   configOwnerUserId: 'user-1',
 }
+
+/** The standard line a customer gets when the bot hands off wordlessly. */
+const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
+const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
 
 function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
@@ -165,6 +176,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 beforeEach(() => {
+  __resetRateLimitForTests()
   h.state.conv = {
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
@@ -182,6 +194,9 @@ beforeEach(() => {
   h.state.testNumbers = null
   h.state.testNumbersError = null
   h.state.contactPhone = '966500000000'
+  h.state.contactName = 'Sara'
+  h.dispatchWebhookEvent.mockReset()
+  h.dispatchWebhookEvent.mockResolvedValue(undefined)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -263,14 +278,15 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when the per-conversation cap is reached', async () => {
+  it('sends no further reply of its own once the per-conversation cap is reached', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: false,
       ai_reply_count: 3,
     }
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE]) // never the model's "Hello!"
+    expect(h.state.rpcCalls).toHaveLength(0)
   })
 
   describe('others already active on the thread', () => {
@@ -373,10 +389,11 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
+  it('disables auto-reply, writes a summary, and tells the customer on a wordless handoff', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true, tagged: true })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE])
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ aiGenerated: true }))
     expect(h.state.rpcCalls).toHaveLength(0)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
     expect(h.state.updatePayload?.ai_handoff_summary).toContain(
@@ -446,9 +463,11 @@ describe('dispatchInboundToAiReply — handoff', () => {
       text: 'Customer asks the price; per the rules… السعر ٢٧٦',
       handoff: false,
       tagged: false,
+      raw: 'Customer asks the price; per the rules… السعر ٢٧٦',
+      retried: true,
     })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_LINE]) // the standard line, never the untagged text
     expect(h.state.rpcCalls).toHaveLength(0)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
   })
@@ -613,7 +632,6 @@ describe('dispatchInboundToAiReply — voice notes', () => {
   it.each([
     ['a human is assigned', { assigned_agent_id: 'agent-9', ai_autoreply_disabled: false, ai_reply_count: 0 }],
     ['the bot is paused on the thread', { assigned_agent_id: null, ai_autoreply_disabled: true, ai_reply_count: 0 }],
-    ['the reply cap is reached', { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }],
   ])('does not listen when %s', async (_label, conv) => {
     h.state.conv = conv
     await dispatchInboundToAiReply(VOICE)
@@ -645,5 +663,312 @@ describe('dispatchInboundToAiReply — voice notes', () => {
     await dispatchInboundToAiReply(VOICE)
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.sendVoiceReply).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
+  const LEAD = {
+    service: 'ac_cleaning',
+    details: [{ question: 'كم عدد المكيفات؟', answer: '3' }],
+    quoted_price_sar: 300,
+    customer_name: 'سارة',
+    area: 'الرياض، حي الملقا',
+    preferred_date: 'يوم الخميس',
+  }
+  const AT_CAP = { assigned_agent_id: null, ai_autoreply_disabled: false, ai_reply_count: 3 }
+  const event = () => h.dispatchWebhookEvent.mock.calls[0]?.[3] as Record<string, unknown>
+
+  it('a customer who said yes: one event with the lead, and only the goodbye reaches the customer', async () => {
+    h.state.contactPhone = '+966 50 000 0000'
+    h.generateReply.mockResolvedValue({
+      text: 'تم، سيتواصل معك أحد الزملاء.',
+      handoff: true,
+      lead: LEAD,
+      ready: true,
+      leadUnreadable: false,
+      tagged: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      'conversation.handed_off',
+      {
+        conversation_id: 'conv-1',
+        contact: { id: 'contact-1', phone: '966500000000', name: 'Sara' },
+        reason: 'customer_ready',
+        summary: h.state.updatePayload?.ai_handoff_summary,
+        handed_off_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
+        lead: LEAD,
+      },
+    )
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('Customer is ready: ac cleaning, quoted 300 SAR')
+
+    // The customer gets the goodbye and nothing else.
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0].text).toBe('تم، سيتواصل معك أحد الزملاء.')
+  })
+
+  it('a handoff without a yes still passes on what the bot collected (the rep prices it)', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'سيتواصل معك أحد الزملاء لتحديد السعر.',
+      handoff: true,
+      lead: { ...LEAD, service: 'villa_cleaning', quoted_price_sar: null },
+      ready: false,
+      leadUnreadable: false,
+      tagged: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({
+      reason: 'bot_cannot_help',
+      lead: { ...LEAD, service: 'villa_cleaning', quoted_price_sar: null },
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('Collected so far: villa cleaning')
+    expect(h.state.updatePayload?.ai_handoff_summary).not.toContain('Customer is ready')
+  })
+
+  it('details survive output that could not be sent: reason other, lead kept', async () => {
+    h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: LEAD, ready: false, leadUnreadable: false, tagged: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(event()).toMatchObject({ reason: 'other', lead: LEAD })
+  })
+
+  it('details the model wrote on an ordinary turn are ignored: no handoff, no event', async () => {
+    h.generateReply.mockResolvedValue({ text: 'كم عدد المكيفات؟', handoff: false, lead: LEAD, ready: false, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['كم عدد المكيفات؟'])
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('a plain model handoff reports bot_cannot_help with no lead', async () => {
+    h.state.contactName = null
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, lead: null, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({
+      reason: 'bot_cannot_help',
+      lead: null,
+      contact: { id: 'contact-1', phone: '966500000000', name: null },
+    })
+  })
+
+  it('an unreadable lead block is still a handoff — plain, flagged in the note, lead null', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'سيتواصل معك أحد الزملاء.',
+      handoff: true,
+      lead: null,
+      leadUnreadable: true,
+      tagged: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('could not be read')
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'other', lead: null })
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+  })
+
+  it('output that cannot be sent (untagged) reports other', async () => {
+    h.generateReply.mockResolvedValue({ text: 'x', handoff: false, lead: null, leadUnreadable: false, tagged: false, raw: 'x', retried: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(event()).toMatchObject({ reason: 'other', lead: null })
+    expect(sentTexts()).toEqual([EN_LINE])
+    // The owner can see it was a fault, that a second try ran, and what was written.
+    const note = String(h.state.updatePayload?.ai_handoff_summary)
+    expect(note).toContain('did not choose this')
+    expect(note).toContain('even on a second try')
+    expect(note).toContain('It wrote: “x”')
+  })
+
+  it('a bare [[HANDOFF]] is reported as the bot\'s own choice, and the customer still gets the standard line', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'وش الخدمات اللي عندكم؟' }])
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, lead: null, leadUnreadable: false, tagged: false, raw: '[[HANDOFF]]', retried: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(event()).toMatchObject({ reason: 'bot_cannot_help', lead: null })
+    expect(sentTexts()).toEqual([AR_LINE])
+    const note = String(h.state.updatePayload?.ai_handoff_summary)
+    expect(note).toContain('The bot chose to hand off.')
+    expect(note).not.toContain('did not choose this')
+  })
+
+  it('reports voice_note_failed when a voice note cannot be understood', async () => {
+    h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'failed', reason: 'no speech could be made out in the voice note.' })
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.1', accessToken: 'token' },
+    })
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'voice_note_failed', lead: null })
+    expect(String(event().summary)).toContain('no speech')
+  })
+
+  it('at the reply cap: withholds the reply, hands off to a person and reports reply_cap', async () => {
+    h.state.conv = AT_CAP
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    await dispatchInboundToAiReply(ARGS) // the model answers "Hello!" as usual
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      assigned_agent_id: 'agent-7',
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('limit of 3 replies')
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'reply_cap', lead: null })
+    expect(sentTexts()).toEqual([EN_LINE])
+    expect(h.state.rpcCalls).toHaveLength(0)
+  })
+
+  it('at the reply cap: a customer who says yes is still handed over with their details', async () => {
+    h.state.conv = AT_CAP
+    h.generateReply.mockResolvedValue({ text: 'تم', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'customer_ready', lead: LEAD })
+    expect(h.engineSendText.mock.calls.map((c) => c[0].text)).toEqual(['تم'])
+  })
+
+  it('reports the number WhatsApp gave, not however the contact was typed in', async () => {
+    h.state.contactPhone = '0501234567'
+    h.generateReply.mockResolvedValue({ text: '', handoff: true, lead: null, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply({ ...ARGS, fromPhone: '966501234567' })
+    expect(event()).toMatchObject({ contact: { phone: '966501234567' } })
+  })
+
+  it('at the reply cap with a teammate already talking: stays out of it', async () => {
+    h.state.conv = AT_CAP
+    h.state.messageRows = [
+      {
+        conversation_id: 'conv-1',
+        sender_type: 'agent',
+        ai_generated: false,
+        created_at: new Date().toISOString(),
+      },
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('fires nothing when another inbound already won the handoff', async () => {
+    h.state.handoffWon = false
+    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('fires nothing on an ordinary reply', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('still reports the handoff when sending the goodbye fails', async () => {
+    h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
+    h.engineSendText.mockRejectedValue(new Error('Meta is down'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(event()).toMatchObject({ reason: 'customer_ready', lead: LEAD })
+  })
+
+  it.each([
+    ['a ready customer', () => h.generateReply.mockResolvedValue({ text: 'bye', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })],
+    ['the reply cap', () => { h.state.conv = AT_CAP }],
+  ])('test mode holds: nothing fires for a number off the test list (%s)', async (_label, arrange) => {
+    arrange()
+    h.state.testNumbers = ['966511111111']
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — a handoff is never silent', () => {
+  const bare = { text: '', handoff: true, lead: null, leadUnreadable: false, tagged: true }
+
+  it('answers in Arabic when the customer wrote in Arabic', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'السلام عليكم' },
+      { role: 'assistant', content: 'Hello' },
+      { role: 'user', content: 'كم سعر تنظيف المكيف؟' },
+    ])
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([AR_LINE])
+  })
+
+  it('keeps the model’s own goodbye when it wrote one', async () => {
+    h.generateReply.mockResolvedValue({ ...bare, text: 'A colleague will call you.' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['A colleague will call you.'])
+  })
+
+  it('a wordless handoff leaves a note that says the bot chose it', async () => {
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload?.ai_handoff_summary).not.toContain('did not choose this')
+  })
+
+  it.each([
+    ['another inbound already won the handoff', () => { h.state.handoffWon = false }],
+    ['the contact is no longer on the test list', () => {
+      // On the list when the message arrived, edited off it before the send.
+      h.state.testNumbers = ['966500000000']
+      h.generateReply.mockImplementation(async () => {
+        h.state.contactPhone = '966599999999'
+        return bare
+      })
+    }],
+    ['a teammate replied while the model was thinking', () => {
+      h.generateReply.mockImplementation(async () => {
+        h.state.messageRows = [
+          { conversation_id: 'conv-1', sender_type: 'agent', ai_generated: false, created_at: new Date().toISOString() },
+        ]
+        return bare
+      })
+    }],
+  ])('sends nothing when %s', async (_label, arrange) => {
+    h.generateReply.mockResolvedValue(bare)
+    arrange()
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('stays out of a voice note it could not understand (a person must listen first)', async () => {
+    h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'failed', reason: 'no speech could be made out in the voice note.' })
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.1', accessToken: 'token' },
+    })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('is sent as text only, even when the customer spoke', async () => {
+    h.generateReply.mockResolvedValue(bare)
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.1', accessToken: 'token' },
+    })
+    expect(sentTexts()).toHaveLength(1)
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — after Resume AI', () => {
+  const prompt = () => h.generateReply.mock.calls[0][0].systemPrompt as string
+
+  it('tells the model it has been switched back on, so an old handoff in the history does not repeat', async () => {
+    h.state.conv = { ...h.state.conv, ai_resumed_at: '2026-11-11T20:10:00.000Z' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(prompt()).toContain('switched you back on')
+  })
+
+  it('says nothing of the kind on a thread that was never handed off', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(prompt()).not.toContain('switched you back on')
   })
 })

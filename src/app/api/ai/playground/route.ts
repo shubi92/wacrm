@@ -5,6 +5,7 @@ import { loadAiConfig } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
+import { handoffFallbackMessage } from '@/lib/ai/handoff'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 
@@ -84,17 +85,29 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff, tagged } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff, lead, ready, tagged, raw, retried } = await generateReply({ config, systemPrompt, messages })
     // Same disposition as the live bot (auto-reply.ts): only a complete
-    // <reply> block is ever sent, and empty/untagged output hands off. The
-    // customer-facing `reply` is what a real customer would receive, so it
-    // stays empty for untagged output — that text never enters the
-    // Playground's conversation history either.
-    const wouldSend = tagged ? text : ''
+    // <reply> block is ever sent, and empty/untagged output hands off —
+    // with the standard hand-off line in place of the unusable text, which
+    // never enters the Playground's conversation history either.
+    const handsOff = handoff || !text || !tagged
+    const wouldSend =
+      tagged && text ? text : handoffFallbackMessage(latestUserMessage(messages))
     return NextResponse.json({
       reply: wouldSend,
-      handoff: handoff || !text || !tagged,
+      handoff: handsOff,
+      // No complete <reply> block. Also true for a bare [[HANDOFF]] —
+      // `chose_handoff` tells a decision from a formatting fault.
       untagged: !tagged,
+      chose_handoff: handoff,
+      retried,
+      // What the model actually wrote, whenever that is not simply the
+      // reply above — so a handoff can be explained without guessing.
+      raw: handsOff ? raw : null,
+      // What the live bot would pass on with this handoff, and whether
+      // it counts the customer as having said yes.
+      lead: handsOff ? lead : null,
+      ready,
     })
   } catch (err) {
     if (err instanceof AiError) {

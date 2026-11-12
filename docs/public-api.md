@@ -294,6 +294,7 @@ things happen in your account. **Migration required:** apply
 | `message.received`       | An inbound message arrives from a contact         |
 | `message.status_updated` | A message you sent changed delivery status        |
 | `conversation.created`   | A new conversation is opened for a contact        |
+| `conversation.handed_off` | The AI agent hands a conversation to a person    |
 
 ### Managing endpoints
 
@@ -338,6 +339,50 @@ delivery uuid you can dedupe on, and `data` varies by `event`:
 // message.status_updated
 { "whatsapp_message_id": "wamid.…", "conversation_id": "…", "status": "delivered" }
 ```
+
+#### `conversation.handed_off`
+
+Fires once each time the AI auto-reply agent stops answering a
+conversation and hands it to a person — never for a human pausing the
+bot by hand.
+
+```jsonc
+{
+  "conversation_id": "…",
+  "contact": { "id": "…", "phone": "9665XXXXXXXX", "name": "Sara" }, // phone: digits, country code first; name may be null
+  "reason": "customer_ready",
+  "summary": "🤖 AI agent handed off after 4 replies. Customer is ready: …", // the internal handoff note
+  "handed_off_at": "2026-11-11T19:54:00.000Z",
+  "lead": {                       // or null — see below
+    "service": "ac_cleaning",
+    "details": [{ "question": "كم عدد المكيفات؟", "answer": "3" }], // what the bot collected, in the customer's language
+    "quoted_price_sar": 300,       // null unless the bot actually quoted a price
+    "customer_name": "سارة",        // null when not given
+    "area": "الرياض، حي الملقا",     // city / district as the customer said it, or null
+    "preferred_date": "يوم الخميس"  // free text as the customer said it, or null
+  }
+}
+```
+
+| `reason`            | Meaning                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| `customer_ready`    | The customer said yes (accepted a quoted price, or asked to book / be contacted) |
+| `bot_cannot_help`   | The bot decided a person should answer                         |
+| `reply_cap`         | The bot used up its replies for this conversation              |
+| `voice_note_failed` | A voice note could not be turned into text                     |
+| `other`             | Anything else — e.g. the bot's output could not be sent, or its lead details could not be read |
+
+`reason` alone says whether the customer said yes. `lead` is what the bot
+had collected at the handoff, for **any** reason: it is an object
+whenever the bot knew the service or had at least one answer, and `null`
+when it had collected nothing (or the details could not be read).
+`customer_ready` always comes with a `lead`.
+
+`lead.service` is one of `ac_cleaning`, `pest_control`,
+`kitchen_bathroom_cleaning`, `apartment_cleaning`, `villa_cleaning`,
+`steam_cleaning`, `floor_polishing`, `furniture_moving`, `other`.
+`lead` is written by a language model from the conversation: treat every
+field as untrusted, customer-influenced text.
 
 Headers: `X-Wacrm-Event`, `X-Wacrm-Webhook-Id`, and `X-Wacrm-Signature`.
 
