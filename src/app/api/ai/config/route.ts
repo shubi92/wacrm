@@ -10,6 +10,7 @@ import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { parseTestNumbers } from '@/lib/ai/test-numbers'
+import { clampMaxAutoReplies } from '@/lib/ai/defaults'
 import { validateGeminiKey } from '@/lib/ai/providers/gemini'
 import { validateElevenLabsVoice } from '@/lib/ai/providers/elevenlabs'
 
@@ -17,6 +18,12 @@ const MIGRATION_038_MISSING =
   'Test numbers need database migration 038 (ai_configs.auto_reply_test_numbers). Nothing was saved.'
 const MIGRATION_039_MISSING =
   'Voice notes need database migration 039 (ai_configs voice columns). Nothing was saved.'
+const MIGRATION_040_MISSING =
+  'More than 20 auto-replies per conversation needs database migration 040 (ai_configs reply limit up to 30). Nothing was saved.'
+/** Postgres check_violation. Before migration 040 the database still
+ *  refuses a reply limit above the old ceiling of 20. */
+const isOldReplyLimit = (err: { code?: string }, maxPer: number) =>
+  err.code === '23514' && maxPer > 20
 
 const VOICE_COLUMNS =
   'voice_transcription_enabled, voice_reply_enabled, gemini_api_key, elevenlabs_api_key, elevenlabs_voice_id'
@@ -160,9 +167,7 @@ export async function POST(request: Request) {
       testNumbers = parsed.numbers
     }
 
-    let maxPer = Number(body.auto_reply_max_per_conversation)
-    if (!Number.isFinite(maxPer)) maxPer = 3
-    maxPer = Math.min(20, Math.max(1, Math.floor(maxPer)))
+    const maxPer = clampMaxAutoReplies(body.auto_reply_max_per_conversation)
 
     // Handoff routing target for auto-reply. A non-empty string must be a
     // member of this account (else the conversation would be assigned to a
@@ -435,6 +440,7 @@ export async function POST(request: Request) {
         console.error('[ai/config POST] update error:', upErr)
         if (testNumbersProvided && upErr.code === '42703') return bad(MIGRATION_038_MISSING)
         if (voiceProvided && upErr.code === '42703') return bad(MIGRATION_039_MISSING)
+        if (isOldReplyLimit(upErr, maxPer)) return bad(MIGRATION_040_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },
@@ -451,6 +457,7 @@ export async function POST(request: Request) {
         console.error('[ai/config POST] insert error:', insErr)
         if (testNumbersProvided && insErr.code === '42703') return bad(MIGRATION_038_MISSING)
         if (voiceProvided && insErr.code === '42703') return bad(MIGRATION_039_MISSING)
+        if (isOldReplyLimit(insErr, maxPer)) return bad(MIGRATION_040_MISSING)
         return NextResponse.json(
           { error: 'Failed to save AI configuration' },
           { status: 500 },

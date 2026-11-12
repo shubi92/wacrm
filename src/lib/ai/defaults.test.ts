@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
-import { buildSystemPrompt } from './defaults'
+import {
+  buildSystemPrompt,
+  MAX_AUTO_REPLIES_CEILING,
+  clampMaxAutoReplies,
+} from './defaults'
 import { LEAD_SERVICES } from './lead'
 
 const USER_PROMPT = 'We are Al-Waha home services in Riyadh.'
@@ -56,5 +61,26 @@ describe('buildSystemPrompt — a handoff always carries a message', () => {
     expect(prompt).not.toContain('Reply with only')
     expect(prompt).not.toContain('without messaging the customer')
     expect(prompt).toContain('write one short, polite message')
+  })
+})
+
+describe('max auto-replies per conversation', () => {
+  it('30 saves, 31 is trimmed to 30, 0 becomes 1', () => {
+    expect(clampMaxAutoReplies(30)).toBe(30)
+    expect(clampMaxAutoReplies(31)).toBe(30)
+    expect(clampMaxAutoReplies(0)).toBe(1)
+  })
+
+  it('keeps the old handling of odd input', () => {
+    expect(clampMaxAutoReplies('8')).toBe(8)
+    expect(clampMaxAutoReplies(7.9)).toBe(7)
+    expect(clampMaxAutoReplies(-5)).toBe(1)
+    expect(clampMaxAutoReplies(undefined)).toBe(3)
+    expect(clampMaxAutoReplies('many')).toBe(3)
+  })
+
+  it('the database accepts exactly the same ceiling (migration 040)', () => {
+    const sql = readFileSync('supabase/migrations/040_ai_reply_cap_30.sql', 'utf8')
+    expect(sql).toContain(`BETWEEN 1 AND ${MAX_AUTO_REPLIES_CEILING})`)
   })
 })

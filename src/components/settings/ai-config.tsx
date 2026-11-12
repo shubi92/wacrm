@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/select';
 import { SettingsPanelHead } from './settings-panel-head';
 import { AiKnowledgeCard } from './ai-knowledge';
-import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
+import { AI_PROVIDER_DEFAULT_MODEL, MAX_AUTO_REPLIES_CEILING } from '@/lib/ai/defaults';
 import type { AiProvider } from '@/lib/ai/types';
 import type { AccountMember } from '@/types';
 import { fetchAccountMembers, memberLabel } from '@/lib/account/members';
@@ -510,11 +510,11 @@ export function AiConfig() {
                 id="ai-max"
                 type="number"
                 min={1}
-                max={20}
+                max={MAX_AUTO_REPLIES_CEILING}
                 value={maxPerConversation}
                 onChange={(e) =>
                   setMaxPerConversation(
-                    Math.min(20, Math.max(1, Number(e.target.value) || 1)),
+                    Math.min(MAX_AUTO_REPLIES_CEILING, Math.max(1, Number(e.target.value) || 1)),
                   )
                 }
                 disabled={disabled || !autoReplyEnabled}
