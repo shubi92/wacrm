@@ -172,12 +172,14 @@ export interface Conversation {
   /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took
-   *    over, or the model handed off). Sticky until re-enabled.
-   *  - `ai_reply_count` — how many times the bot has auto-replied,
-   *    checked against the account's per-conversation cap.
+   *    over, or the model handed off). Sticky until re-enabled; only a
+   *    pause the reply cap caused lifts by itself, after a quiet day.
+   *  - `ai_reply_count` — how many times the bot has auto-replied since
+   *    it last started over, checked against the account's cap.
    *  - `ai_handoff_summary` — short internal note the bot wrote when it
    *    handed off, shown to whoever takes the thread over.
-   *  - `ai_resumed_at` — last "Resume AI" click; the bot ignores outbound
+   *  - `ai_resumed_at` — when the bot last started over here: a "Resume
+   *    AI" click, or by itself after a quiet day. It ignores outbound
    *    sent before it when deciding whether someone else is active.
    */
   ai_autoreply_disabled?: boolean;

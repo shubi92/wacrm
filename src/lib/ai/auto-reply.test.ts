@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
     outboundFilters: [] as [string, string, unknown][],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
+    updatePayloads: [] as Record<string, unknown>[],
     updateFilters: [] as [string, unknown][],
     handoffWon: true as boolean,
     rpcCalls: [] as { name: string; args: unknown }[],
@@ -119,6 +120,7 @@ vi.mock('./admin-client', () => ({
         // `handoffWon` decides whether the guarded update matched a row.
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
+          h.state.updatePayloads.push(payload)
           const chain = {
             eq: (col: string, val: unknown) => {
               h.state.updateFilters.push([col, val])
@@ -128,11 +130,16 @@ vi.mock('./admin-client', () => ({
               h.state.updateFilters.push([col, val])
               return chain
             },
-            select: () =>
-              Promise.resolve({
+            select: () => {
+              // A winning update really changes the row, so a re-read sees it.
+              if (h.state.handoffWon && h.state.conv) {
+                h.state.conv = { ...h.state.conv, ...payload }
+              }
+              return Promise.resolve({
                 data: h.state.handoffWon ? [{ id: 'conv-1' }] : [],
                 error: null,
-              }),
+              })
+            },
           }
           return chain
         },
@@ -159,6 +166,14 @@ const ARGS = {
 const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
 const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
 const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
+/** A `messages` row sent to the customer on this chat `hours` ago. */
+const sentHoursAgo = (hours: number, overrides: Record<string, unknown> = {}) => ({
+  conversation_id: 'conv-1',
+  sender_type: 'bot',
+  ai_generated: true,
+  created_at: new Date(Date.now() - hours * 3_600_000).toISOString(),
+  ...overrides,
+})
 
 function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
@@ -188,6 +203,7 @@ beforeEach(() => {
   h.state.outboundFilters = []
   h.state.claim = true
   h.state.updatePayload = null
+  h.state.updatePayloads = []
   h.state.updateFilters = []
   h.state.handoffWon = true
   h.state.rpcCalls = []
@@ -284,6 +300,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       ai_autoreply_disabled: false,
       ai_reply_count: 3,
     }
+    h.state.messageRows = [sentHoursAgo(1)]
     await dispatchInboundToAiReply(ARGS)
     expect(sentTexts()).toEqual([EN_LINE]) // never the model's "Hello!"
     expect(h.state.rpcCalls).toHaveLength(0)
@@ -808,6 +825,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
 
   it('at the reply cap: withholds the reply, hands off to a person and reports reply_cap', async () => {
     h.state.conv = AT_CAP
+    h.state.messageRows = [sentHoursAgo(1)]
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
     await dispatchInboundToAiReply(ARGS) // the model answers "Hello!" as usual
     expect(h.state.updatePayload).toMatchObject({
@@ -823,6 +841,7 @@ describe('dispatchInboundToAiReply — conversation.handed_off webhook', () => {
 
   it('at the reply cap: a customer who says yes is still handed over with their details', async () => {
     h.state.conv = AT_CAP
+    h.state.messageRows = [sentHoursAgo(1)]
     h.generateReply.mockResolvedValue({ text: 'تم', handoff: true, lead: LEAD, ready: true, leadUnreadable: false, tagged: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
@@ -970,5 +989,133 @@ describe('dispatchInboundToAiReply — after Resume AI', () => {
   it('says nothing of the kind on a thread that was never handed off', async () => {
     await dispatchInboundToAiReply(ARGS)
     expect(prompt()).not.toContain('switched you back on')
+  })
+})
+
+describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => {
+  const CAP_NOTE = '🤖 AI agent handed off: it reached its limit of 3 replies on this chat. Please take over.'
+  /** Paused by the reply cap, nobody assigned. */
+  const CAPPED = {
+    assigned_agent_id: null,
+    ai_autoreply_disabled: true,
+    ai_reply_count: 3,
+    ai_handoff_summary: CAP_NOTE,
+    ai_resumed_at: null,
+  }
+  const untouched = () => {
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  }
+
+  it('a capped chat: the customer returns after 24 quiet hours and gets an answer', async () => {
+    h.state.conv = CAPPED
+    h.state.messageRows = [sentHoursAgo(25)] // the bot's goodbye
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayloads).toEqual([
+      {
+        ai_autoreply_disabled: false,
+        ai_reply_count: 0,
+        ai_handoff_summary: null,
+        ai_resumed_at: expect.any(String),
+      },
+    ])
+    // Only while still paused, unassigned and not resumed by anyone else.
+    expect(h.state.updateFilters).toEqual([
+      ['id', 'conv-1'],
+      ['ai_autoreply_disabled', true],
+      ['assigned_agent_id', null],
+      ['ai_resumed_at', null],
+    ])
+    expect(h.state.rpcCalls).toHaveLength(1) // a slot of the fresh budget
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it('a capped chat: the customer returns after 2 hours and the bot stays paused', async () => {
+    h.state.conv = CAPPED
+    h.state.messageRows = [sentHoursAgo(2)]
+    await dispatchInboundToAiReply(ARGS)
+    untouched()
+  })
+
+  it('a capped chat: a teammate replied inside the 24 hours, so the bot stays paused', async () => {
+    h.state.conv = CAPPED
+    h.state.messageRows = [
+      sentHoursAgo(30),
+      sentHoursAgo(3, { sender_type: 'agent', ai_generated: false }),
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    untouched()
+  })
+
+  it('the customer writing again while waiting does not keep the bot locked out', async () => {
+    h.state.conv = CAPPED
+    h.state.messageRows = [
+      sentHoursAgo(25),
+      sentHoursAgo(10, { sender_type: 'customer', ai_generated: false }),
+      sentHoursAgo(1, { sender_type: 'customer', ai_generated: false }),
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it.each([
+    ['the bot could not help', '🤖 AI agent handed off after 2 replies. The bot chose to hand off.'],
+    ['the customer is ready', '🤖 AI agent handed off after 2 replies. Customer is ready: ac cleaning, quoted 300 SAR.'],
+    ['a person paused it (no note)', null],
+  ])('a pause the cap did not cause is never lifted: %s', async (_label, note) => {
+    h.state.conv = { ...CAPPED, ai_handoff_summary: note }
+    h.state.messageRows = [sentHoursAgo(72)]
+    await dispatchInboundToAiReply(ARGS)
+    untouched()
+  })
+
+  it('a capped chat a person is assigned to stays with that person', async () => {
+    h.state.conv = { ...CAPPED, assigned_agent_id: 'agent-7' }
+    h.state.messageRows = [sentHoursAgo(72)]
+    await dispatchInboundToAiReply(ARGS)
+    untouched()
+  })
+
+  it('a chat at its cap but not paused: answered after a quiet day instead of handed off', async () => {
+    h.state.conv = { ...CAPPED, ai_autoreply_disabled: false, ai_handoff_summary: null }
+    h.state.messageRows = [sentHoursAgo(48)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayloads).toHaveLength(1)
+    expect(h.state.updatePayloads[0]).toMatchObject({ ai_reply_count: 0 })
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it('never a second fresh budget inside the same 24 hours', async () => {
+    // Started over an hour ago and already used up: a reply still on its
+    // way (claimed, not yet stored) must not let the chat start over again.
+    h.state.conv = {
+      ...CAPPED,
+      ai_autoreply_disabled: false,
+      ai_handoff_summary: null,
+      ai_resumed_at: new Date(Date.now() - 3_600_000).toISOString(),
+    }
+    h.state.messageRows = []
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toBe(CAP_NOTE)
+    expect(sentTexts()).toEqual([EN_LINE])
+  })
+
+  it('loses the race to another inbound: carries on from what is really there', async () => {
+    h.state.conv = CAPPED
+    h.state.messageRows = [sentHoursAgo(25)]
+    h.state.handoffWon = false // the guarded update matched no row
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled() // still paused on re-read
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('leaves a new chat alone (nothing to reset, no extra lookup)', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.state.outboundFilters.filter(([, col]) => col === 'ai_generated')).toHaveLength(
+      h.state.outboundFilters.filter(([op]) => op === 'gte').length,
+    ) // every messages lookup was the "others active" one
   })
 })

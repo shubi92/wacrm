@@ -57,8 +57,8 @@ export function buildSystemPrompt(args: {
   mode: 'draft' | 'auto_reply'
   /** Knowledge-base excerpts retrieved for the current question. */
   knowledge?: string[]
-  /** Auto-reply only: a person switched the bot back on for this chat
-   *  after an earlier handoff ("Resume AI"). */
+  /** Auto-reply only: the bot was switched back on for this chat — by a
+   *  person ("Resume AI"), or by itself after a quiet day. */
   resumed?: boolean
 }): string {
   const { userPrompt, mode, knowledge, resumed } = args
