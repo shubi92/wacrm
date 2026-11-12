@@ -166,6 +166,42 @@ describe('transcribeAudio', () => {
     expect((await failure(transcribeAudio(ARGS))).code).toBe('rate_limited')
   })
 
+  describe('a brief outage at Google (5xx)', () => {
+    const UNAVAILABLE = errResponse(503, { error: { message: 'The model is overloaded.' } })
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('retries once and returns the transcript', async () => {
+      fetchMock().mockResolvedValueOnce(UNAVAILABLE).mockResolvedValueOnce(okResponse(transcript('مرحبا')))
+      const result = transcribeAudio(ARGS)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(await result).toBe('مرحبا')
+      expect(fetchMock()).toHaveBeenCalledTimes(2)
+    })
+
+    it('gives up after the one retry, with Google\'s own message', async () => {
+      fetchMock().mockResolvedValue(UNAVAILABLE)
+      const result = failure(transcribeAudio(ARGS))
+      await vi.advanceTimersByTimeAsync(2_000)
+      const err = await result
+      expect(err.code).toBe('provider_error')
+      expect(err.message).toBe('Gemini API error (503): The model is overloaded.')
+      expect(fetchMock()).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not retry when too little of the time budget is left', async () => {
+      fetchMock().mockResolvedValue(UNAVAILABLE)
+      await failure(transcribeAudio({ ...ARGS, timeoutMs: 2_000 }))
+      expect(fetchMock()).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('does not retry a 4xx (key, quota, bad request)', async () => {
+    fetchMock().mockResolvedValue(errResponse(429, { error: { message: 'Quota exceeded' } }))
+    await failure(transcribeAudio(ARGS))
+    expect(fetchMock()).toHaveBeenCalledTimes(1)
+  })
+
   it('maps a timeout to code "timeout" and other rejections to network_error', async () => {
     fetchMock().mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
     expect((await failure(transcribeAudio(ARGS))).code).toBe('timeout')

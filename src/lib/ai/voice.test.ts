@@ -188,6 +188,14 @@ describe('transcribeInboundVoiceNote', () => {
       status: 'failed',
     })
   })
+
+  it('puts the real error in the handoff reason, so it is visible without server logs', async () => {
+    h.transcribeAudio.mockRejectedValue(new AiError('Gemini API error (429): quota exceeded'))
+    const out = await transcribeInboundVoiceNote(fakeDb(), LISTEN)
+    expect((out as { reason: string }).reason).toBe(
+      'the voice note could not be turned into text (Gemini API error (429): quota exceeded).',
+    )
+  })
 })
 
 describe('toSpeakableText', () => {

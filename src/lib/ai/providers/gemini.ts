@@ -14,6 +14,8 @@ import { providerHttpError, toNetworkError } from './shared'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 const VALIDATE_TIMEOUT_MS = 10_000
+/** Pause before the single retry of a 5xx answer. */
+const RETRY_DELAY_MS = 1_500
 
 /**
  * Model used for voice-note transcription.
@@ -83,9 +85,10 @@ export async function transcribeAudio(args: {
 }): Promise<string> {
   const { apiKey, audio, mimeType, timeoutMs } = args
 
-  let res: Response
-  try {
-    res = await fetch(`${GEMINI_BASE}/models/${GEMINI_TRANSCRIBE_MODEL}:generateContent`, {
+  // One time budget for the whole call, retry included.
+  const deadline = Date.now() + timeoutMs
+  const post = () =>
+    fetch(`${GEMINI_BASE}/models/${GEMINI_TRANSCRIBE_MODEL}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
       // Field casing follows Google's own REST examples.
@@ -115,10 +118,18 @@ export async function transcribeAudio(args: {
           // later model generation will answer it with HTTP 400.
         },
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    }).catch((err) => {
+      throw toNetworkError(err)
     })
-  } catch (err) {
-    throw toNetworkError(err)
+
+  let res = await post()
+  // Google answers 503 ("model overloaded") in short bursts — it failed
+  // the first real voice note. One retry usually gets through; 4xx
+  // (key, billing, quota, bad request) won't change, so those don't retry.
+  if (res.status >= 500 && deadline - Date.now() > 2 * RETRY_DELAY_MS) {
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+    res = await post()
   }
 
   if (!res.ok) {
