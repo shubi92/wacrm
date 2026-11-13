@@ -37,6 +37,14 @@ export function isReplyCapSummary(summary: string | null | undefined): boolean {
 }
 
 /**
+ * The internal note left when a connected system pauses the bot through
+ * `POST /api/v1/conversations/{id}/ai-pause`. Not the reply cap's note,
+ * so the quiet-day reset treats it as a person's pause and leaves it.
+ */
+export const API_PAUSE_NOTE =
+  '⏸ AI agent paused by a connected system (API). Resume AI hands the chat back to the bot.'
+
+/**
  * Build the short internal note the auto-reply bot leaves on a
  * conversation when it hands off to a human. Deterministic — composed
  * from context we already have (no extra LLM call / token spend), so it
