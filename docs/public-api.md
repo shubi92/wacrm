@@ -43,7 +43,7 @@ it. Grant the minimum.
 
 | Scope                | Allows                                   |
 | -------------------- | ---------------------------------------- |
-| `messages:send`      | Send WhatsApp messages                   |
+| `messages:send`      | Send WhatsApp messages; pause the AI agent on a conversation |
 | `messages:read`      | Read messages and delivery status        |
 | `contacts:read`      | List and read contacts                   |
 | `contacts:write`     | Create and update contacts               |
@@ -218,6 +218,27 @@ Paginated. Each message includes its `direction` (`inbound` /
 `outbound`), `status` (delivery state), `whatsapp_message_id`, and
 `content_*`. The conversation is verified to belong to your account
 first (`404` otherwise).
+
+### `POST /api/v1/conversations/{id}/ai-pause`
+
+Stop the AI agent on one conversation — call it when a person on your
+side takes the chat. Scope: `messages:send`. No request body.
+
+```bash
+curl -X POST https://your-wacrm.example.com/api/v1/conversations/CONVERSATION_ID/ai-pause \
+  -H "Authorization: Bearer wacrm_live_…"
+# → 200 { "data": { "id": "…", "ai_paused": true, "already_paused": false } }
+```
+
+- The bot stops at once, including a reply it was still writing.
+- Safe to repeat: a conversation that is already paused answers `200`
+  with `already_paused: true`.
+- Nothing is sent to the customer and no webhook fires
+  (`conversation.handed_off` is only for the bot's own handoffs).
+- The inbox shows the conversation as paused. The pause stays until
+  someone clicks **Resume AI** there; there is no resume endpoint.
+- `404` (`not_found`) if the conversation does not exist or belongs to
+  another account.
 
 ### `POST /api/v1/broadcasts`
 
