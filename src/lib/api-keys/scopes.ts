@@ -27,7 +27,7 @@ export type ApiScope = (typeof API_SCOPES)[number];
 
 /** Human-readable descriptions, surfaced in the key-creation UI. */
 export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
-  'messages:send': 'Send WhatsApp messages',
+  'messages:send': 'Send WhatsApp messages and pause the AI agent on a conversation',
   'messages:read': 'Read messages and their delivery status',
   'contacts:read': 'List and read contacts',
   'contacts:write': 'Create and update contacts',
