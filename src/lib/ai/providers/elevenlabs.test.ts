@@ -50,6 +50,8 @@ describe('synthesizeSpeech', () => {
     expect(JSON.parse(init.body as string)).toEqual({
       text: ARGS.text,
       model_id: ELEVENLABS_TTS_MODEL,
+      // Slower than the voice's own pace (1.0), and nothing else overridden.
+      voice_settings: { speed: 0.9 },
     })
     expect(url).not.toContain('fake-xi-key')
   })

@@ -26,6 +26,12 @@ export const ELEVENLABS_OPUS_FORMAT = 'opus_48000_32'
 /** Fallback only (sent as a plain audio message). No plan restriction —
  *  only mp3 192 kbps needs Creator or above. */
 export const ELEVENLABS_MP3_FORMAT = 'mp3_44100_64'
+/** Speaking pace. 1.0 is the voice's own pace, which the owner found
+ *  slightly fast for Arabic replies; ElevenLabs accepts 0.7 (slowest)
+ *  to 1.2. Only the pace is sent, nothing else about the voice.
+ *  ponytail: one pace for every account, in code. Make it a setting on
+ *  the AI Agents page if it needs tuning more than once or twice. */
+export const ELEVENLABS_SPEED = 0.9
 
 /**
  * ElevenLabs errors are `{ detail: { code, status, message } }` (`status`
@@ -96,7 +102,11 @@ export async function synthesizeSpeech(args: {
     res = await fetch(url, {
       method: 'POST',
       headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, model_id: ELEVENLABS_TTS_MODEL }),
+      body: JSON.stringify({
+        text,
+        model_id: ELEVENLABS_TTS_MODEL,
+        voice_settings: { speed: ELEVENLABS_SPEED },
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
