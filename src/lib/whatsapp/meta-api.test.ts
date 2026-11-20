@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERACTIVE_LIMITS,
   sendInteractiveButtons,
+  sendInteractiveFlow,
   sendInteractiveList,
   sendTemplateMessage,
 } from "./meta-api";
@@ -139,6 +140,67 @@ describe("sendInteractiveButtons — validation", () => {
         },
       },
     });
+  });
+});
+
+describe("sendInteractiveFlow", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a WhatsApp form by its name, with the button and the token", async () => {
+    let body: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        body = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.FORM" }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await sendInteractiveFlow({
+      ...BASE_ARGS,
+      flowName: "furniture_moving_en",
+      buttonLabel: "Open form",
+      flowToken: "furniture_moving:en",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.FORM" });
+    expect(body).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "interactive",
+      interactive: {
+        type: "flow",
+        body: { text: "Body text" },
+        action: {
+          name: "flow",
+          parameters: {
+            flow_message_version: "3",
+            flow_name: "furniture_moving_en",
+            flow_cta: "Open form",
+            flow_token: "furniture_moving:en",
+          },
+        },
+      },
+    });
+  });
+
+  it("refuses an empty message before calling Meta", async () => {
+    vi.stubGlobal("fetch", vi.fn(neverFetch));
+    await expect(
+      sendInteractiveFlow({
+        ...BASE_ARGS,
+        bodyText: "",
+        flowName: "furniture_moving_en",
+        buttonLabel: "Open form",
+        flowToken: "t",
+      }),
+    ).rejects.toThrow(/bodyText/);
   });
 });
 
