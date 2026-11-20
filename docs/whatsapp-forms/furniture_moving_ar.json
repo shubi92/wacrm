@@ -1974,6 +1974,7 @@
               "payload": {
                 "form": "furniture_moving",
                 "lang": "ar",
+                "quantities": "ticked",
                 "move_type": "${screen.MOVE.form.move_type}",
                 "city": "${screen.MOVE.form.city}",
                 "from_city": "${screen.MOVE.form.from_city}",

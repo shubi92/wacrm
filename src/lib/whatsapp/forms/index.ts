@@ -22,13 +22,25 @@ export const BOT_FORMS: Record<string, { button: Record<FormLang, string> }> = {
 
 /** `[[FORM:furniture_moving]]` in the model's output. */
 const FORM_MARKER = /\[\[\s*FORM\s*:\s*([a-z0-9_]+)\s*\]\]/gi
+/** Anything shaped like a form marker, however the model mangled it
+ *  (`[FORM:x]`, `[[FORM: x y]]`), and the history's own `[form sent]`. */
+const FORM_LIKE = /\[{1,2}\s*FORM\b[^\]\n]{0,80}\]{1,2}/gi
+
+/** Appended, in the bot's view of the chat, to a line of its own that
+ *  went out with a form's button (see `buildConversationContext`). */
+export const FORM_SENT_NOTE = '[form sent]'
+
+/** An account switches forms on by naming one in its instructions. */
+export const mentionsForms = (instructions: string | null | undefined): boolean =>
+  /\[\[\s*FORM\s*:/i.test(instructions ?? '')
 
 /** The form the model asked to send (null when none, or one we don't
- *  have), and its text with every form marker removed. */
+ *  have), and its text with everything marker-like removed — a mangled
+ *  marker must not reach the customer either. */
 export function takeFormMarker(text: string): { form: string | null; text: string } {
   const names = [...text.matchAll(FORM_MARKER)].map((m) => m[1].toLowerCase())
-  const form = names.find((n) => n in BOT_FORMS) ?? null
-  return { form, text: text.replace(FORM_MARKER, '') }
+  const form = names.find((n) => Object.hasOwn(BOT_FORMS, n)) ?? null
+  return { form, text: text.replace(FORM_LIKE, '') }
 }
 
 /** Arabic script in the bot's line → the Arabic form. */
@@ -70,6 +82,18 @@ export function readFormResponse(responseJson: unknown): {
   text: string
   submission: FormSubmission | null
 } {
+  // Customer-supplied data on the webhook path: whatever it holds, the
+  // message must still be stored.
+  try {
+    return read(responseJson)
+  } catch {
+    return { text: UNREADABLE, submission: null }
+  }
+}
+
+const UNREADABLE = '📋 Form response (could not be read)'
+
+function read(responseJson: unknown): { text: string; submission: FormSubmission | null } {
   let answers: Record<string, unknown> | null = null
   try {
     const parsed = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson
@@ -79,7 +103,7 @@ export function readFormResponse(responseJson: unknown): {
   } catch {
     // falls through: not JSON
   }
-  if (!answers) return { text: '📋 Form response (could not be read)', submission: null }
+  if (!answers) return { text: UNREADABLE, submission: null }
 
   // The form's own `form` field, or the token we sent it with.
   const token = typeof answers.flow_token === 'string' ? answers.flow_token : ''

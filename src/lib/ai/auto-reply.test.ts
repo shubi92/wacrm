@@ -1130,6 +1130,34 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
 
 describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
   const AR = 'يسعدنا نخدمك في النقل. اضغط الزر وعبّئ النموذج السريع.'
+  // An account switches forms on by naming one in its instructions.
+  const SCRIPT = 'For furniture moving, add [[FORM:furniture_moving]] after your reply.'
+  beforeEach(() => h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: SCRIPT })))
+
+  it('teaches the model about forms only on an account that uses them', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('Forms that exist: furniture_moving.')
+    h.generateReply.mockClear()
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).not.toContain('[[FORM')
+  })
+
+  it('sends plain text when the account never asked for forms, whatever the model wrote', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true, form: 'furniture_moving' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendFlowForm).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it('does not shut the chat when the form was delivered and only our record of it failed', async () => {
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    h.engineSendFlowForm.mockRejectedValue(new Error('sent to Meta but DB insert failed: timeout'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull() // still the bot's, so the answers get their handoff
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
 
   it('sends the form the model asked for, in the language of its line, in place of a text', async () => {
     h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })

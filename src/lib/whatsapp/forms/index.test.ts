@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formLang, formMessage, readFormResponse, takeFormMarker } from './index'
+import { formLang, formMessage, mentionsForms, readFormResponse, takeFormMarker } from './index'
 
 describe('takeFormMarker', () => {
   it('finds the form and removes the marker from the text', () => {
@@ -13,6 +13,34 @@ describe('takeFormMarker', () => {
   it('ignores a form that does not exist, but still never lets the marker through', () => {
     expect(takeFormMarker('Hi [[FORM:free_money]]')).toEqual({ form: null, text: 'Hi ' })
     expect(takeFormMarker('Hi there')).toEqual({ form: null, text: 'Hi there' })
+  })
+
+  it.each(['constructor', '__proto__', 'tostring', 'hasownproperty'])(
+    'does not take %s for a form',
+    (name) => {
+      expect(takeFormMarker(`Hi [[FORM:${name}]]`)).toEqual({ form: null, text: 'Hi ' })
+    },
+  )
+
+  it.each([
+    '[[FORM:furniture-moving]]',
+    '[[FORM: furniture moving]]',
+    '[FORM:furniture_moving]',
+    '[form sent]',
+  ])('strips a mangled marker (%s) without sending a form for it', (mangled) => {
+    expect(takeFormMarker(`Tap below. ${mangled}`)).toEqual({ form: null, text: 'Tap below. ' })
+  })
+
+  it('leaves ordinary brackets alone', () => {
+    expect(takeFormMarker('Sizes [S, M, L] and a form to fill').text).toBe('Sizes [S, M, L] and a form to fill')
+  })
+})
+
+describe('mentionsForms', () => {
+  it('is how an account switches forms on', () => {
+    expect(mentionsForms('For moving add [[FORM:furniture_moving]] after your reply.')).toBe(true)
+    expect(mentionsForms('We are a cleaning company. Fill our form on the website.')).toBe(false)
+    expect(mentionsForms(null)).toBe(false)
   })
 })
 
@@ -98,6 +126,15 @@ describe('readFormResponse', () => {
     const { text } = readFormResponse(JSON.stringify(many))
     expect(text.split('\n')).toHaveLength(1 + 40)
     expect(text.length).toBeLessThan(41 * 400)
+  })
+
+  it('survives values built to break it', () => {
+    const deep = '['.repeat(20000) + ']'.repeat(20000)
+    expect(() => readFormResponse(`{"form":"furniture_moving","notes":${deep}}`)).not.toThrow()
+    expect(() => readFormResponse(`{"x":${deep}}`)).not.toThrow()
+    expect(
+      readFormResponse('{"form":"furniture_moving","bedrooms":[{"toString":1}],"qty_master":{"toString":1}}').submission,
+    ).not.toBeNull()
   })
 
   it.each([undefined, '', 'not json', '[1,2]', 'null'])('never throws on %j', (bad) => {

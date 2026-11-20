@@ -13,7 +13,12 @@ import {
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendFlowForm, engineSendText } from '@/lib/flows/meta-send'
-import { formLang, formMessage, type FormSubmission } from '@/lib/whatsapp/forms'
+import {
+  formLang,
+  formMessage,
+  mentionsForms,
+  type FormSubmission,
+} from '@/lib/whatsapp/forms'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { isTestNumberAllowed } from './test-numbers'
 import {
@@ -361,7 +366,8 @@ export async function dispatchInboundToAiReply(
 
     // The model asked for a form: its reply is the line above the
     // form's button. Nothing is read aloud — the button is the point.
-    if (form) {
+    // Only for an account whose own instructions name a form.
+    if (form && mentionsForms(config.systemPrompt)) {
       await sendFormOrHandOff(db, { ...handoffBase, configOwnerUserId, form, text })
       return
     }
@@ -468,8 +474,10 @@ async function sendFormOrHandOff(
   },
 ): Promise<void> {
   const { accountId, conversationId, contactId, configOwnerUserId: userId } = args
-  const message = formMessage(args.form, formLang(args.text))
+  let flowName = args.form
   try {
+    const message = formMessage(args.form, formLang(args.text))
+    flowName = message.flowName
     await engineSendFlowForm({
       accountId,
       userId,
@@ -481,12 +489,15 @@ async function sendFormOrHandOff(
     })
     return
   } catch (err) {
-    console.error(`[ai auto-reply] could not send the form ${message.flowName}:`, err)
+    console.error(`[ai auto-reply] could not send the form ${flowName}:`, err)
     const why = err instanceof Error ? err.message : String(err)
+    // The form reached the customer; only our own record of it failed.
+    // Handing off now would shut the chat before their answers arrive.
+    if (why.startsWith('sent to Meta')) return
     const { won, notified } = await handOff(db, {
       ...args,
       reason: 'other',
-      summary: `🤖 AI agent handed off: it could not send the form “${message.flowName}” (${why.slice(0, 200)}). Is a form published under that name in WhatsApp Manager? Please take over.`,
+      summary: `🤖 AI agent handed off: it could not send the form “${flowName}” (${why.slice(0, 200)}). Is a form published under that name in WhatsApp Manager? Please take over.`,
     })
     try {
       if (won) {

@@ -41,8 +41,10 @@ UPDATE_FORMS=1 npx vitest run src/lib/whatsapp/forms
    > If they write instead of opening the form, hand off.
 
 The agent sends the Arabic form when its own line is in Arabic and the
-English one otherwise. Nothing needs to be configured in this app: the
-form is found by its name.
+English one otherwise. Nothing else needs to be configured in this app:
+the form is found by its name, and naming a form in the instructions
+(`[[FORM:…]]`) is what switches forms on for the account. Without it the
+agent is never told forms exist and never sends one.
 
 ## What happens
 
@@ -60,7 +62,11 @@ form is found by its name.
 
 If the agent is switched off, paused on that chat, or a person already has
 the chat when the form comes back, the answers still appear in the inbox
-but nothing else happens.
+but nothing else happens: no thank-you and no `conversation.handed_off`.
+That includes a customer who typed after getting the form, was handed
+off, and filled the form in later.
+
+A submitted form never starts a Flow or a keyword automation.
 
 If the form cannot be sent (for example no form is published under that
 name), the agent hands the chat to a person and the inbox note says why.

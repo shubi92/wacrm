@@ -74,7 +74,7 @@ describe.each(['en', 'ar'] as const)('moving form JSON (%s)', (lang) => {
     const fields = flow.screens.flatMap((s) =>
       components(s.layout.children as Node[]).map((c) => c.name).filter(Boolean),
     )
-    expect(sent.sort()).toEqual([...fields, 'form', 'lang'].sort())
+    expect(sent.sort()).toEqual([...fields, 'form', 'lang', 'quantities'].sort())
   })
 
   // The file is what gets pasted into WhatsApp Manager, so it must be
@@ -90,6 +90,7 @@ describe.each(['en', 'ar'] as const)('moving form JSON (%s)', (lang) => {
 const WITHIN = {
   form: 'furniture_moving',
   lang: 'en',
+  quantities: 'ticked',
   flow_token: 'furniture_moving:en',
   move_type: 'within',
   city: 'riyadh',
@@ -104,7 +105,10 @@ const WITHIN = {
   qty_kids_beds: '2', // ticked, then unticked: its number stays behind
   living: ['sofas'],
   qty_sofas: '5',
-  other_furniture: [],
+  // `other_furniture` left out, as a phone may do for an untouched tick
+  // list, while its hidden number lists still send their starting "1".
+  qty_screens: '1',
+  qty_desk: '1',
   other_items: 'Piano, 2 large mirrors',
   appliances: ['fridge', 'washer'],
   qty_fridge: '1',
@@ -160,8 +164,35 @@ describe('readMovingAnswers', () => {
     expect(row(a, 'Move')).toBe('Between two cities')
     expect(row(a, 'From')).toBe('Riyadh, Al Malqa · 2nd floor')
     expect(row(a, 'To')).toBe('Jeddah, Al Yasmin · Ground floor')
-    expect(a.thankYou).toMatch(/^شكراً نورة\. وصلتنا تفاصيل النقل: من الرياض إلى جدة، /)
-    expect(a.thankYou).toMatch(/5 نوع من الأثاث والأجهزة\. يتواصل معك فريق المبيعات قريباً\.$/)
+    expect(a.thankYou).toBe(
+      'شكراً نورة. وصلتنا تفاصيل النقل: من الرياض إلى جدة، 28 نوفمبر 2026، 5 أنواع من الأثاث والأجهزة. يتواصل معك فريق المبيعات قريباً.',
+    )
+  })
+
+  it('counts kinds the way Arabic does', () => {
+    const kinds = (n: number) =>
+      readMovingAnswers({
+        lang: 'ar',
+        quantities: 'all',
+        ...Object.fromEntries(
+          ['master', 'kids_beds', 'wardrobes', 'sofas', 'majlis', 'carpets', 'dining', 'chairs', 'side_tables', 'screens', 'bookcase']
+            .slice(0, n)
+            .map((id) => [`qty_${id}`, '1']),
+        ),
+      }).thankYou
+    expect(kinds(1)).toContain('نوع واحد من الأثاث')
+    expect(kinds(2)).toContain('نوعان من الأثاث')
+    expect(kinds(3)).toContain('3 أنواع من الأثاث')
+    expect(kinds(11)).toContain('11 نوعاً من الأثاث')
+  })
+
+  it('names the district when the city is "Another city", and no route when both ends read the same', () => {
+    const other = readMovingAnswers({ ...WITHIN, move_type: 'between', from_city: 'riyadh', to_city: 'other', to_district: 'Unaizah' })
+    expect(other.thankYou).toContain('Riyadh to Unaizah,')
+    const same = readMovingAnswers({ ...WITHIN, to_district: 'Al Malqa' })
+    expect(same.thankYou).toBe(
+      'Thank you, Noura. We received your moving details: 28 Nov 2026, 5 kinds of furniture and appliances. Our sales team will contact you shortly.',
+    )
   })
 
   it('reads the fallback form too: a number above 0 means the customer has it', () => {
@@ -170,7 +201,16 @@ describe('readMovingAnswers', () => {
     expect(row(a, 'Appliances')).toBe('Oven ×2')
   })
 
+  it('keeps every value inside the lead contract\'s 300 characters', () => {
+    const long = 'x'.repeat(5000)
+    const a = readMovingAnswers({ ...WITHIN, city: long, from_district: long, to_district: long, notes: long })
+    expect(Math.max(...a.rows.map((r) => [...r.value].length), [...a.area!].length)).toBe(300)
+  })
+
   it('never throws on a form that came back nearly empty or odd', () => {
+    // Objects where text or a number belongs must not break the reader.
+    const odd = readMovingAnswers({ quantities: 'ticked', bedrooms: [{ toString: 1 }, 'master'], qty_master: { toString: 1 }, ac_split: [] })
+    expect(row(odd, 'Furniture')).toBe('Master bedroom ×1')
     const a = readMovingAnswers({ move_date: 'next week', city: 'taif', bedrooms: 'master', name: 7 })
     expect(row(a, 'Moving date')).toBe('next week')
     expect(row(a, 'From')).toBe('taif') // an unknown option is shown as sent

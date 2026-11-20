@@ -363,6 +363,7 @@ export function buildMovingFlowJson(lang: FormLang, quantities: QuantityStyle = 
                   // Meta's reply does not say which form it is.
                   form: MOVING_FORM,
                   lang,
+                  quantities,
                   ...answered('MOVE', [
                     'move_type', 'city', 'from_city', 'from_district', 'to_city',
                     'to_district', 'move_date', 'from_floor', 'to_floor',
@@ -424,14 +425,29 @@ export function readMovingAnswers(a: Record<string, unknown>): MovingAnswers {
     return v === null ? null : (options.find((o) => o.id === v)?.label[l] ?? v)
   }
   const num = (key: string): number => {
-    const n = Number(a[key])
+    const v = a[key]
+    const n = typeof v === 'string' || typeof v === 'number' ? Number(v) : NaN
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
   }
-  /** "Wardrobes ×3, Carpets ×4". With tick lists a ticked item counts
-   *  even if its number is missing; without them, any number above 0. */
+  /**
+   * "Wardrobes ×3, Carpets ×4". With tick lists only a ticked item
+   * counts (1 if its number is missing) — a hidden number list still
+   * sends its starting "1", so the numbers alone mean nothing there.
+   * Without tick lists, any number above 0 counts. The form says which
+   * kind it is (`quantities`); if it doesn't, a group that sent a tick
+   * list is read as ticks.
+   */
   const items = (groups: ItemGroup[]): string[] =>
     groups.flatMap((g) => {
-      const ticked = Array.isArray(a[g.id]) ? (a[g.id] as unknown[]).map(String) : null
+      const sent = a[g.id]
+      const ticked =
+        a.quantities === 'all'
+          ? null
+          : Array.isArray(sent)
+            ? sent.filter((v): v is string => typeof v === 'string')
+            : a.quantities === 'ticked'
+              ? []
+              : null
       return g.items
         .filter((it) => (ticked ? ticked.includes(it.id) : num(qty(it)) > 0))
         .map((it) => `${it.label.en} ×${num(qty(it)) || 1}`)
@@ -474,25 +490,27 @@ export function readMovingAnswers(a: Record<string, unknown>): MovingAnswers {
     ['Curtains', `${num('curtains_roller')} roller, ${num('curtains_fabric')} fabric`],
     ['Call', pick('call_time', CALL_TIMES)],
     ['Notes', text('notes') ?? 'None'],
-  ].map(([label, value]) => ({ label: label as string, value: value || '—' }))
+  ].map(([label, value]) => ({ label: label as string, value: clip(value || '—') }))
 
   // The customer's own words for where: the district inside one city,
-  // the city between two.
+  // the city between two (the district again for "Another city").
   const spot = (which: 'from' | 'to') => {
     const s = side(which, lang)
-    return (between ? s.city : s.district) ?? s.city ?? s.district
+    const namedCity = between && a[`${which}_city`] !== 'other' ? s.city : null
+    return namedCity ?? s.district ?? s.city
   }
   const kinds = furniture.length + appliances.length
   const when = formatDate(date, lang)
   const [from, to] = [spot('from'), spot('to')]
+  const route = !!from && !!to && from !== to
   const thankYou =
     lang === 'ar'
       ? [
           `شكراً${name ? ` ${name}` : ''}. وصلتنا تفاصيل النقل`,
           [
-            from && to && `من ${from} إلى ${to}`,
+            route && `من ${from} إلى ${to}`,
             when,
-            kinds > 0 && `${kinds} نوع من الأثاث والأجهزة`,
+            kinds > 0 && `${arabicKinds(kinds)} من الأثاث والأجهزة`,
           ]
             .filter(Boolean)
             .join('، '),
@@ -502,7 +520,7 @@ export function readMovingAnswers(a: Record<string, unknown>): MovingAnswers {
       : [
           `Thank you${name ? `, ${name}` : ''}. We received your moving details`,
           [
-            from && to && `${from} to ${to}`,
+            route && `${from} to ${to}`,
             when,
             kinds > 0 && `${kinds} ${kinds === 1 ? 'kind' : 'kinds'} of furniture and appliances`,
           ]
@@ -514,16 +532,23 @@ export function readMovingAnswers(a: Record<string, unknown>): MovingAnswers {
 
   const area = [place('from'), place('to')].every((p) => p === '—')
     ? null
-    : `${place('from')} → ${place('to')}`
+    : clip(`${place('from')} → ${place('to')}`)
   return { lang, rows, name, area, date, thankYou }
 }
 
-/** "2026-11-28" → "28 Nov 2026" / "٢٨ نوفمبر ٢٠٢٦"; anything else as sent. */
+/** No longer than the lead contract allows; never half an emoji. */
+const clip = (s: string) => [...s].slice(0, MAX_TEXT).join('')
+
+/** Arabic counts its nouns four ways. */
+const arabicKinds = (n: number) =>
+  n === 1 ? 'نوع واحد' : n === 2 ? 'نوعان' : n <= 10 ? `${n} أنواع` : `${n} نوعاً`
+
+/** "2026-11-28" → "28 Nov 2026" / "28 نوفمبر 2026"; anything else as sent. */
 function formatDate(value: string | null, lang: FormLang): string | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
   const d = new Date(`${value}T00:00:00Z`)
   if (Number.isNaN(d.getTime())) return value
-  return d.toLocaleDateString(lang === 'ar' ? 'ar-SA-u-ca-gregory' : 'en-GB', {
+  return d.toLocaleDateString(lang === 'ar' ? 'ar-SA-u-ca-gregory-nu-latn' : 'en-GB', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

@@ -79,13 +79,31 @@ describe('buildConversationContext', () => {
       { sender_type: 'customer', content_type: 'audio', content_text: 'كم سعر التأشيرة؟' },
     ]
     const out = await buildConversationContext(fakeDb(rows), 'conv-1')
-    expect(inFilters).toEqual([['content_type', ['text', 'audio']]])
+    expect(inFilters).toEqual([['content_type', ['text', 'audio', 'interactive']]])
     // Untranscribed voice notes are excluded in the query, so they can't
     // crowd real messages out of the window.
     expect(notFilters).toEqual([['content_text', 'is', null]])
     expect(out).toEqual([
       { role: 'user', content: 'كم سعر التأشيرة؟' },
       { role: 'assistant', content: 'السعر ٣٠٠ ريال' },
+    ])
+  })
+
+  it("shows the bot its own form message, marked, and no other interactive message", async () => {
+    const rows = [
+      // newest first
+      { sender_type: 'customer', content_text: 'ok' },
+      // A Flow's menu and a customer's button tap: as before, not modelled.
+      { sender_type: 'customer', content_type: 'interactive', content_text: 'Existing customer' },
+      { sender_type: 'bot', content_type: 'interactive', content_text: 'Pick one', ai_generated: false },
+      // The auto-reply bot's line that went out with the form's button.
+      { sender_type: 'bot', content_type: 'interactive', content_text: 'Tap below.', ai_generated: true },
+      { sender_type: 'customer', content_text: 'I need furniture moving' },
+    ]
+    expect(await buildConversationContext(fakeDb(rows), 'conv-1')).toEqual([
+      { role: 'user', content: 'I need furniture moving' },
+      { role: 'assistant', content: 'Tap below. [form sent]' },
+      { role: 'user', content: 'ok' },
     ])
   })
 })

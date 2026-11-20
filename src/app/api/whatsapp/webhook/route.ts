@@ -727,7 +727,11 @@ async function processMessage(
   // no active flows take the runner's early-exit "no_match" path
   // basically for free (one indexed SELECT for the active run).
   // ============================================================
-  const flowResult = await dispatchInboundToFlows({
+  // A submitted form skips the runner and the keyword triggers below:
+  // its text is the form's own labels plus the customer's answers, so a
+  // Flow or automation keyed on a word like "moving" or "yes" would fire
+  // on every submission (and, by consuming it, cancel the handoff).
+  const flowResult = isFormReply ? { consumed: false } : await dispatchInboundToFlows({
     accountId,
     userId: configOwnerUserId,
     contactId: contactRecord.id,
@@ -764,7 +768,7 @@ async function processMessage(
   )[] = []
   // Content-level triggers are suppressed when a flow consumed the
   // message — see the comment block above.
-  if (!flowConsumed) {
+  if (!flowConsumed && !isFormReply) {
     automationTriggers.push('new_message_received', 'keyword_match')
     // Interactive tap → fire the interactive_reply trigger too (only
     // meaningful when a button/list reply actually arrived). Enables
@@ -810,7 +814,7 @@ async function processMessage(
     // The answers are not a message to reply to: the bot thanks the
     // customer and hands the chat, with the answers, to a person. A form
     // we can't read just sits in the inbox.
-    if (formSubmission && !flowConsumed) {
+    if (formSubmission) {
       await dispatchFormSubmissionToAiReply({
         accountId,
         conversationId: conversation.id,
