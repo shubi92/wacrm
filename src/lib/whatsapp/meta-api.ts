@@ -1000,6 +1000,66 @@ export async function sendInteractiveList(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendInteractiveFlowArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  bodyText: string
+  /** The Flow's name in WhatsApp Manager (must be published). */
+  flowName: string
+  /** Label of the button that opens the form. Meta advises 30
+   *  characters or fewer and no emoji. */
+  buttonLabel: string
+  /** Comes back with the answers, as `response_json.flow_token`. */
+  flowToken: string
+}
+
+/**
+ * Send a WhatsApp Flow — a form that opens over the chat — as an
+ * interactive message. Needs no template while the 24h customer window
+ * is open. The answers come back on the messages webhook as
+ * `interactive.nfm_reply`. (Unrelated to this app's own Flows engine.)
+ * https://developers.facebook.com/docs/whatsapp/flows/guides/sendingaflow
+ */
+export async function sendInteractiveFlow(
+  args: SendInteractiveFlowArgs
+): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, bodyText, flowName, buttonLabel, flowToken } = args
+  validateInteractiveBody(bodyText)
+
+  const response = await fetch(`${META_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        body: { text: bodyText },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_name: flowName,
+            flow_cta: buttonLabel,
+            flow_token: flowToken,
+          },
+        },
+      },
+    }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 function validateInteractiveBody(bodyText: string): void {
   if (!bodyText) throw new Error('Interactive message requires bodyText.')
   if (bodyText.length > INTERACTIVE_LIMITS.bodyMaxLength) {

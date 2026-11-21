@@ -75,6 +75,9 @@ export interface GenerateResult {
   lead: HandoffLead | null
   /** The customer said yes. Implies `handoff` and a non-null `lead`. */
   ready: boolean
+  /** The WhatsApp form the model asked to send with this reply
+   *  (`[[FORM:name]]`), or null. See `@/lib/whatsapp/forms`. */
+  form: string | null
   /** The model wrote a lead block that could not be read — the turn is
    *  handled as a plain handoff, without details. */
   leadUnreadable: boolean

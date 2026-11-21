@@ -1,5 +1,6 @@
 import {
   sendInteractiveButtons,
+  sendInteractiveFlow,
   sendInteractiveList,
   sendMediaMessage,
   sendTextMessage,
@@ -327,9 +328,36 @@ export async function engineSendInteractiveList(
   return sendInteractiveViaMeta({ ...args, kind: 'list' })
 }
 
+interface SendFlowFormEngineArgs {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  bodyText: string
+  /** The form's name in WhatsApp Manager, button label and token —
+   *  see `formMessage` in `@/lib/whatsapp/forms`. */
+  flowName: string
+  buttonLabel: string
+  flowToken: string
+  /** Marks the persisted row `ai_generated = true`, as in `engineSendText`. */
+  aiGenerated?: boolean
+}
+
+/**
+ * Send a WhatsApp form (a Meta "WhatsApp Flow": it opens over the chat,
+ * and is unrelated to this Flows engine). The customer's answers arrive
+ * later as one inbound message.
+ */
+export async function engineSendFlowForm(
+  args: SendFlowFormEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  return sendInteractiveViaMeta({ ...args, kind: 'flow' })
+}
+
 type SendInput =
   | (SendInteractiveButtonsEngineArgs & { kind: 'buttons' })
   | (SendInteractiveListEngineArgs & { kind: 'list' })
+  | (SendFlowFormEngineArgs & { kind: 'flow' })
 
 async function sendInteractiveViaMeta(
   input: SendInput,
@@ -366,6 +394,18 @@ async function sendInteractiveViaMeta(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    if (input.kind === 'flow') {
+      const r = await sendInteractiveFlow({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        bodyText: input.bodyText,
+        flowName: input.flowName,
+        buttonLabel: input.buttonLabel,
+        flowToken: input.flowToken,
+      })
+      return r.messageId
+    }
     if (input.kind === 'buttons') {
       const r = await sendInteractiveButtons({
         phoneNumberId: config.phone_number_id,
@@ -428,7 +468,17 @@ async function sendInteractiveViaMeta(
   // the inbox thread re-renders the buttons/rows the bot sent (round-
   // trip), matching the composer + automation send paths.
   const interactivePayload: InteractiveMessagePayload =
-    input.kind === 'buttons'
+    input.kind === 'flow'
+      ? // ponytail: stored as a one-button message, so the inbox draws
+        // the form's "Open form" button with the preview it already has.
+        // Give forms their own payload kind if the inbox ever has to
+        // tell them apart from reply buttons.
+        {
+          kind: 'buttons',
+          body: input.bodyText,
+          buttons: [{ id: input.flowToken, title: input.buttonLabel }],
+        }
+      : input.kind === 'buttons'
       ? {
           kind: 'buttons',
           body: input.bodyText,
@@ -453,6 +503,7 @@ async function sendInteractiveViaMeta(
     interactive_payload: interactivePayload,
     message_id: waMessageId,
     status: 'sent',
+    ai_generated: input.kind === 'flow' && !!input.aiGenerated,
   })
   if (msgErr) {
     throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)

@@ -1,0 +1,2028 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "MOVE",
+      "title": "تفاصيل النقل",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "RadioButtonsGroup",
+            "name": "move_type",
+            "label": "أين النقل؟",
+            "required": true,
+            "data-source": [
+              {
+                "id": "within",
+                "title": "داخل نفس المدينة"
+              },
+              {
+                "id": "between",
+                "title": "بين مدينتين"
+              }
+            ]
+          },
+          {
+            "type": "If",
+            "condition": "${form.move_type} == 'between'",
+            "then": [
+              {
+                "type": "Dropdown",
+                "name": "from_city",
+                "label": "النقل من: المدينة",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "riyadh",
+                    "title": "الرياض"
+                  },
+                  {
+                    "id": "kharj",
+                    "title": "الخرج"
+                  },
+                  {
+                    "id": "jeddah",
+                    "title": "جدة"
+                  },
+                  {
+                    "id": "dammam",
+                    "title": "الدمام"
+                  },
+                  {
+                    "id": "other",
+                    "title": "مدينة أخرى"
+                  }
+                ]
+              }
+            ],
+            "else": [
+              {
+                "type": "Dropdown",
+                "name": "city",
+                "label": "المدينة",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "riyadh",
+                    "title": "الرياض"
+                  },
+                  {
+                    "id": "kharj",
+                    "title": "الخرج"
+                  },
+                  {
+                    "id": "jeddah",
+                    "title": "جدة"
+                  },
+                  {
+                    "id": "dammam",
+                    "title": "الدمام"
+                  },
+                  {
+                    "id": "other",
+                    "title": "مدينة أخرى"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "TextInput",
+            "name": "from_district",
+            "label": "النقل من: الحي",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "If",
+            "condition": "${form.move_type} == 'between'",
+            "then": [
+              {
+                "type": "Dropdown",
+                "name": "to_city",
+                "label": "النقل إلى: المدينة",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "riyadh",
+                    "title": "الرياض"
+                  },
+                  {
+                    "id": "kharj",
+                    "title": "الخرج"
+                  },
+                  {
+                    "id": "jeddah",
+                    "title": "جدة"
+                  },
+                  {
+                    "id": "dammam",
+                    "title": "الدمام"
+                  },
+                  {
+                    "id": "other",
+                    "title": "مدينة أخرى"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "TextInput",
+            "name": "to_district",
+            "label": "النقل إلى: الحي",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "DatePicker",
+            "name": "move_date",
+            "label": "تاريخ النقل",
+            "required": true
+          },
+          {
+            "type": "Dropdown",
+            "name": "from_floor",
+            "label": "المنزل الحالي: الدور",
+            "required": true,
+            "data-source": [
+              {
+                "id": "ground",
+                "title": "الدور الأرضي"
+              },
+              {
+                "id": "1",
+                "title": "الدور الأول"
+              },
+              {
+                "id": "2",
+                "title": "الدور الثاني"
+              },
+              {
+                "id": "3",
+                "title": "الدور الثالث"
+              },
+              {
+                "id": "4_plus",
+                "title": "الدور الرابع أو أعلى"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "to_floor",
+            "label": "المنزل الجديد: الدور",
+            "required": true,
+            "data-source": [
+              {
+                "id": "ground",
+                "title": "الدور الأرضي"
+              },
+              {
+                "id": "1",
+                "title": "الدور الأول"
+              },
+              {
+                "id": "2",
+                "title": "الدور الثاني"
+              },
+              {
+                "id": "3",
+                "title": "الدور الثالث"
+              },
+              {
+                "id": "4_plus",
+                "title": "الدور الرابع أو أعلى"
+              }
+            ]
+          },
+          {
+            "type": "Footer",
+            "label": "متابعة",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "FURNITURE"
+              },
+              "payload": {
+                "show_master": false,
+                "show_kids_beds": false,
+                "show_wardrobes": false,
+                "show_sofas": false,
+                "show_majlis": false,
+                "show_carpets": false,
+                "show_dining": false,
+                "show_chairs": false,
+                "show_side_tables": false,
+                "show_screens": false,
+                "show_bookcase": false,
+                "show_desk": false,
+                "show_sports": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "FURNITURE",
+      "title": "الأثاث",
+      "data": {
+        "show_master": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_kids_beds": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_wardrobes": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_sofas": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_majlis": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_carpets": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_dining": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_chairs": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_side_tables": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_screens": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_bookcase": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_desk": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_sports": {
+          "type": "boolean",
+          "__example__": false
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "اختر ما لديك ثم حدد العدد."
+          },
+          {
+            "type": "CheckboxGroup",
+            "name": "bedrooms",
+            "label": "غرف النوم",
+            "required": false,
+            "data-source": [
+              {
+                "id": "master",
+                "title": "غرفة نوم رئيسية",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_master": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_master": false
+                  }
+                }
+              },
+              {
+                "id": "kids_beds",
+                "title": "أسرّة أطفال",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_kids_beds": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_kids_beds": false
+                  }
+                }
+              },
+              {
+                "id": "wardrobes",
+                "title": "دواليب",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_wardrobes": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_wardrobes": false
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_master",
+            "label": "غرفة نوم رئيسية",
+            "required": false,
+            "visible": "${data.show_master}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_kids_beds",
+            "label": "أسرّة أطفال",
+            "required": false,
+            "visible": "${data.show_kids_beds}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_wardrobes",
+            "label": "دواليب",
+            "required": false,
+            "visible": "${data.show_wardrobes}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "CheckboxGroup",
+            "name": "living",
+            "label": "المجالس والمعيشة",
+            "required": false,
+            "data-source": [
+              {
+                "id": "sofas",
+                "title": "قطع كنب",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_sofas": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_sofas": false
+                  }
+                }
+              },
+              {
+                "id": "majlis",
+                "title": "مجلس أرضي",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_majlis": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_majlis": false
+                  }
+                }
+              },
+              {
+                "id": "carpets",
+                "title": "سجاد",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_carpets": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_carpets": false
+                  }
+                }
+              },
+              {
+                "id": "dining",
+                "title": "سفرة طعام مع بوفيه",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dining": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dining": false
+                  }
+                }
+              },
+              {
+                "id": "chairs",
+                "title": "كراسي السفرة",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_chairs": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_chairs": false
+                  }
+                }
+              },
+              {
+                "id": "side_tables",
+                "title": "طاولات خدمة",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_side_tables": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_side_tables": false
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_sofas",
+            "label": "قطع كنب",
+            "required": false,
+            "visible": "${data.show_sofas}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_majlis",
+            "label": "مجلس أرضي",
+            "required": false,
+            "visible": "${data.show_majlis}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_carpets",
+            "label": "سجاد",
+            "required": false,
+            "visible": "${data.show_carpets}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_dining",
+            "label": "سفرة طعام مع بوفيه",
+            "required": false,
+            "visible": "${data.show_dining}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_chairs",
+            "label": "كراسي السفرة",
+            "required": false,
+            "visible": "${data.show_chairs}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_side_tables",
+            "label": "طاولات خدمة",
+            "required": false,
+            "visible": "${data.show_side_tables}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "CheckboxGroup",
+            "name": "other_furniture",
+            "label": "قطع أخرى",
+            "required": false,
+            "data-source": [
+              {
+                "id": "screens",
+                "title": "شاشات",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_screens": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_screens": false
+                  }
+                }
+              },
+              {
+                "id": "bookcase",
+                "title": "مكتبة",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_bookcase": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_bookcase": false
+                  }
+                }
+              },
+              {
+                "id": "desk",
+                "title": "مكتب",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_desk": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_desk": false
+                  }
+                }
+              },
+              {
+                "id": "sports",
+                "title": "أجهزة رياضية",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_sports": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_sports": false
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_screens",
+            "label": "شاشات",
+            "required": false,
+            "visible": "${data.show_screens}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_bookcase",
+            "label": "مكتبة",
+            "required": false,
+            "visible": "${data.show_bookcase}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_desk",
+            "label": "مكتب",
+            "required": false,
+            "visible": "${data.show_desk}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_sports",
+            "label": "أجهزة رياضية",
+            "required": false,
+            "visible": "${data.show_sports}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "TextArea",
+            "name": "other_items",
+            "label": "قطع خارج القائمة",
+            "helper-text": "عندك قطع غير موجودة في القائمة؟ اكتبها هنا.",
+            "required": false
+          },
+          {
+            "type": "Footer",
+            "label": "متابعة",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "KITCHEN"
+              },
+              "payload": {
+                "show_fridge": false,
+                "show_oven": false,
+                "show_freezer": false,
+                "show_washer": false,
+                "show_dryer": false,
+                "show_dishwasher": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "KITCHEN",
+      "title": "المطبخ والتجهيزات",
+      "data": {
+        "show_fridge": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_oven": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_freezer": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_washer": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_dryer": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "show_dishwasher": {
+          "type": "boolean",
+          "__example__": false
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "CheckboxGroup",
+            "name": "appliances",
+            "label": "الأجهزة",
+            "required": false,
+            "data-source": [
+              {
+                "id": "fridge",
+                "title": "ثلاجة",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_fridge": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_fridge": false
+                  }
+                }
+              },
+              {
+                "id": "oven",
+                "title": "فرن",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_oven": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_oven": false
+                  }
+                }
+              },
+              {
+                "id": "freezer",
+                "title": "فريزر",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_freezer": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_freezer": false
+                  }
+                }
+              },
+              {
+                "id": "washer",
+                "title": "غسالة",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_washer": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_washer": false
+                  }
+                }
+              },
+              {
+                "id": "dryer",
+                "title": "مجفف",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dryer": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dryer": false
+                  }
+                }
+              },
+              {
+                "id": "dishwasher",
+                "title": "غسالة صحون",
+                "on-select-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dishwasher": true
+                  }
+                },
+                "on-unselect-action": {
+                  "name": "update_data",
+                  "payload": {
+                    "show_dishwasher": false
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_fridge",
+            "label": "ثلاجة",
+            "required": false,
+            "visible": "${data.show_fridge}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_oven",
+            "label": "فرن",
+            "required": false,
+            "visible": "${data.show_oven}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_freezer",
+            "label": "فريزر",
+            "required": false,
+            "visible": "${data.show_freezer}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_washer",
+            "label": "غسالة",
+            "required": false,
+            "visible": "${data.show_washer}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_dryer",
+            "label": "مجفف",
+            "required": false,
+            "visible": "${data.show_dryer}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "qty_dishwasher",
+            "label": "غسالة صحون",
+            "required": false,
+            "visible": "${data.show_dishwasher}",
+            "init-value": "1",
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "cabinets",
+            "label": "هل يوجد خزائن مطبخ للنقل؟",
+            "required": true,
+            "data-source": [
+              {
+                "id": "yes",
+                "title": "نعم"
+              },
+              {
+                "id": "no",
+                "title": "لا"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "pack_kitchen",
+            "label": "نغلّف ونعبّئ أواني المطبخ؟",
+            "required": true,
+            "data-source": [
+              {
+                "id": "yes",
+                "title": "نعم"
+              },
+              {
+                "id": "no",
+                "title": "لا"
+              }
+            ]
+          },
+          {
+            "type": "TextCaption",
+            "text": "أواني المطبخ: صحون، أكواب، قدور."
+          },
+          {
+            "type": "TextSubheading",
+            "text": "المكيفات"
+          },
+          {
+            "type": "Dropdown",
+            "name": "ac_split",
+            "label": "مكيفات سبليت",
+            "required": false,
+            "init-value": "0",
+            "data-source": [
+              {
+                "id": "0",
+                "title": "0"
+              },
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "ac_window",
+            "label": "مكيفات شباك",
+            "required": false,
+            "init-value": "0",
+            "data-source": [
+              {
+                "id": "0",
+                "title": "0"
+              },
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "ac_install",
+            "label": "تركيب المكيفات بالمنزل الجديد؟",
+            "required": false,
+            "data-source": [
+              {
+                "id": "yes",
+                "title": "نعم"
+              },
+              {
+                "id": "no",
+                "title": "لا"
+              }
+            ]
+          },
+          {
+            "type": "TextSubheading",
+            "text": "الستائر"
+          },
+          {
+            "type": "Dropdown",
+            "name": "curtains_roller",
+            "label": "ستائر رول",
+            "required": false,
+            "init-value": "0",
+            "data-source": [
+              {
+                "id": "0",
+                "title": "0"
+              },
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "curtains_fabric",
+            "label": "ستائر قماش",
+            "required": false,
+            "init-value": "0",
+            "data-source": [
+              {
+                "id": "0",
+                "title": "0"
+              },
+              {
+                "id": "1",
+                "title": "1"
+              },
+              {
+                "id": "2",
+                "title": "2"
+              },
+              {
+                "id": "3",
+                "title": "3"
+              },
+              {
+                "id": "4",
+                "title": "4"
+              },
+              {
+                "id": "5",
+                "title": "5"
+              },
+              {
+                "id": "6",
+                "title": "6"
+              },
+              {
+                "id": "7",
+                "title": "7"
+              },
+              {
+                "id": "8",
+                "title": "8"
+              },
+              {
+                "id": "9",
+                "title": "9"
+              },
+              {
+                "id": "10",
+                "title": "10"
+              }
+            ]
+          },
+          {
+            "type": "Footer",
+            "label": "متابعة",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "CONTACT"
+              },
+              "payload": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "CONTACT",
+      "title": "التواصل",
+      "terminal": true,
+      "success": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextInput",
+            "name": "name",
+            "label": "الاسم",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "Dropdown",
+            "name": "call_time",
+            "label": "أفضل وقت للاتصال بك",
+            "required": true,
+            "data-source": [
+              {
+                "id": "morning",
+                "title": "الصباح"
+              },
+              {
+                "id": "afternoon",
+                "title": "بعد الظهر"
+              },
+              {
+                "id": "evening",
+                "title": "المساء"
+              }
+            ]
+          },
+          {
+            "type": "TextArea",
+            "name": "notes",
+            "label": "ملاحظات",
+            "helper-text": "ملاحظات أخرى",
+            "required": false
+          },
+          {
+            "type": "Footer",
+            "label": "إرسال",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "form": "furniture_moving",
+                "lang": "ar",
+                "quantities": "ticked",
+                "move_type": "${screen.MOVE.form.move_type}",
+                "city": "${screen.MOVE.form.city}",
+                "from_city": "${screen.MOVE.form.from_city}",
+                "from_district": "${screen.MOVE.form.from_district}",
+                "to_city": "${screen.MOVE.form.to_city}",
+                "to_district": "${screen.MOVE.form.to_district}",
+                "move_date": "${screen.MOVE.form.move_date}",
+                "from_floor": "${screen.MOVE.form.from_floor}",
+                "to_floor": "${screen.MOVE.form.to_floor}",
+                "bedrooms": "${screen.FURNITURE.form.bedrooms}",
+                "living": "${screen.FURNITURE.form.living}",
+                "other_furniture": "${screen.FURNITURE.form.other_furniture}",
+                "qty_master": "${screen.FURNITURE.form.qty_master}",
+                "qty_kids_beds": "${screen.FURNITURE.form.qty_kids_beds}",
+                "qty_wardrobes": "${screen.FURNITURE.form.qty_wardrobes}",
+                "qty_sofas": "${screen.FURNITURE.form.qty_sofas}",
+                "qty_majlis": "${screen.FURNITURE.form.qty_majlis}",
+                "qty_carpets": "${screen.FURNITURE.form.qty_carpets}",
+                "qty_dining": "${screen.FURNITURE.form.qty_dining}",
+                "qty_chairs": "${screen.FURNITURE.form.qty_chairs}",
+                "qty_side_tables": "${screen.FURNITURE.form.qty_side_tables}",
+                "qty_screens": "${screen.FURNITURE.form.qty_screens}",
+                "qty_bookcase": "${screen.FURNITURE.form.qty_bookcase}",
+                "qty_desk": "${screen.FURNITURE.form.qty_desk}",
+                "qty_sports": "${screen.FURNITURE.form.qty_sports}",
+                "other_items": "${screen.FURNITURE.form.other_items}",
+                "appliances": "${screen.KITCHEN.form.appliances}",
+                "qty_fridge": "${screen.KITCHEN.form.qty_fridge}",
+                "qty_oven": "${screen.KITCHEN.form.qty_oven}",
+                "qty_freezer": "${screen.KITCHEN.form.qty_freezer}",
+                "qty_washer": "${screen.KITCHEN.form.qty_washer}",
+                "qty_dryer": "${screen.KITCHEN.form.qty_dryer}",
+                "qty_dishwasher": "${screen.KITCHEN.form.qty_dishwasher}",
+                "cabinets": "${screen.KITCHEN.form.cabinets}",
+                "pack_kitchen": "${screen.KITCHEN.form.pack_kitchen}",
+                "ac_split": "${screen.KITCHEN.form.ac_split}",
+                "ac_window": "${screen.KITCHEN.form.ac_window}",
+                "ac_install": "${screen.KITCHEN.form.ac_install}",
+                "curtains_roller": "${screen.KITCHEN.form.curtains_roller}",
+                "curtains_fabric": "${screen.KITCHEN.form.curtains_fabric}",
+                "name": "${form.name}",
+                "call_time": "${form.call_time}",
+                "notes": "${form.notes}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

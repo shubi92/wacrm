@@ -19,6 +19,8 @@ interface Turn {
    *  its answer just couldn't be sent), and what it actually wrote. */
   choseHandoff?: boolean;
   raw?: string | null;
+  /** assistant-only: the WhatsApp form the bot would send with this reply. */
+  form?: string | null;
 }
 
 export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
@@ -73,6 +75,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
           ready: Boolean(data.ready),
           choseHandoff: Boolean(data.chose_handoff),
           raw: typeof data.raw === 'string' ? data.raw : null,
+          form: typeof data.form === 'string' ? data.form : null,
         },
       ]);
     } catch {
@@ -175,6 +178,11 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
                   <summary className="cursor-pointer">What the model actually wrote</summary>
                   <pre dir="auto" className="mt-1 whitespace-pre-wrap">{t.raw}</pre>
                 </details>
+              )}
+              {t.role === 'assistant' && t.form && (
+                <p className="mt-1.5 border-t border-border/50 pt-1.5 text-xs text-muted-foreground">
+                  {`Sent with an "Open form" button: the ${t.form.replace(/_/g, ' ')} form.`}
+                </p>
               )}
               {t.role === 'assistant' && t.lead && (
                 <pre
