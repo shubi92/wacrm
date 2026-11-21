@@ -25,7 +25,7 @@ business uses forms today.
 
 ## One-time setup
 
-1. Run migration `041_form_links.sql`.
+1. Run migration `041_form_links.sql` (one table and one function).
 2. Make sure `NEXT_PUBLIC_SITE_URL` is set to the site's public `https://`
    address. The agent builds the form's link from it. Without it the agent
    cannot send the form and hands the chat to a person instead.
@@ -72,7 +72,8 @@ inbox note says why.
   The server looks up which chat it belongs to. Only a hash of the token is
   stored, and the link is not kept in the inbox message.
 - It works for 7 days and for one submission. Opened again after sending,
-  it shows the "received" screen. An unknown, altered or expired link shows
+  it shows the "received" screen, until the 7 days are up. An unknown,
+  altered or expired link shows
   a plain "this link is no longer valid, please message us on WhatsApp".
 - Sending is a public endpoint (`POST /api/forms/<token>`), so the server
   trusts nothing from the browser: every choice must be one of the form's

@@ -19,6 +19,27 @@ const h = vi.hoisted(() => ({
 vi.mock('@/lib/ai/auto-reply', () => ({ dispatchFormSubmissionToAiReply: h.dispatch }))
 vi.mock('@/lib/ai/admin-client', () => ({
   supabaseAdmin: () => ({
+    // `submit_form_link` (migration 041): use the link up and store the
+    // message, together or not at all.
+    rpc: async (fn: string, args: { p_id: string; p_answers: Row; p_text: string }) => {
+      const error = h.errors[`rpc.${fn}`]
+      if (error) return { data: null, error: { message: error } }
+      const now = new Date().toISOString()
+      const row = (h.tables.form_links ?? []).find(
+        (r) => r.id === args.p_id && (r.submitted_at ?? null) === null && (r.expires_at as string) > now,
+      )
+      if (!row) return { data: false, error: null }
+      Object.assign(row, { submitted_at: now, answers: args.p_answers })
+      h.tables.messages.push({
+        conversation_id: row.conversation_id,
+        sender_type: 'customer',
+        content_type: 'text',
+        content_text: args.p_text,
+        message_id: `form:${args.p_id}`,
+        status: 'delivered',
+      })
+      return { data: true, error: null }
+    },
     from: (name: string) => {
       const rows = (h.tables[name] ??= [])
       const query = (op: 'select' | 'update', patch?: Row) => {
@@ -284,23 +305,16 @@ describe('submitForm — what is turned away', () => {
 })
 
 describe('submitForm — when the database fails', () => {
-  it('releases the link if the message could not be stored, so the customer can send again', async () => {
-    h.errors['messages.insert'] = 'insert timeout'
-    await expect(submitForm(token, ANSWERS)).rejects.toThrow('form message insert failed: insert timeout')
+  it('stores nothing when the database turns the submission down, so the customer can send again', async () => {
+    h.errors['rpc.submit_form_link'] = 'insert timeout'
+    await expect(submitForm(token, ANSWERS)).rejects.toThrow('form submit failed: insert timeout')
     expect(messages()).toEqual([])
     expect(theLink()).toMatchObject({ submitted_at: null, answers: null }) // not "sent" with nothing in the chat
     expect(h.tables.conversations[0].unread_count).toBe(2)
 
-    delete h.errors['messages.insert']
+    delete h.errors['rpc.submit_form_link']
     expect((await submitForm(token, ANSWERS)).status).toBe('accepted')
     expect(messages()).toHaveLength(1)
-  })
-
-  it('throws when the claim itself fails, storing nothing', async () => {
-    h.errors['form_links.update'] = 'deadlock'
-    await expect(submitForm(token, ANSWERS)).rejects.toThrow('form link claim failed: deadlock')
-    expect(messages()).toEqual([])
-    expect(theLink().submitted_at).toBeNull()
   })
 
   it('throws when the link cannot be looked up', async () => {

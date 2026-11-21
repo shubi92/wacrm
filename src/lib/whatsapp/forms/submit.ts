@@ -23,10 +23,11 @@ export type SubmitResult =
   | { status: 'invalid'; fields: Record<string, FieldError> }
 
 /**
- * Check and store one submission. A link is used up by a single UPDATE
- * that only one request can win, so a double tap (or a replay) never
- * makes a second message or a second handoff. Throws if the database
- * fails; the customer is then asked to try again and the link stays open.
+ * Check and store one submission. Using the link up and storing the
+ * message is one database transaction that only one request can win, so
+ * a double tap (or a replay) never makes a second message or a second
+ * handoff. Throws if the database fails; nothing is stored then, the
+ * link stays open and the customer is asked to try again.
  */
 export async function submitForm(token: string, raw: unknown): Promise<SubmitResult> {
   const db = supabaseAdmin()
@@ -40,38 +41,23 @@ export async function submitForm(token: string, raw: unknown): Promise<SubmitRes
   const checked = form.validate(raw)
   if (!checked.ok) return { status: 'invalid', fields: checked.fields }
 
-  const now = new Date().toISOString()
-  const { data: claimed, error: claimError } = await db
-    .from('form_links')
-    .update({ submitted_at: now, answers: checked.answers })
-    .eq('id', link.id)
-    .is('submitted_at', null)
-    .gt('expires_at', now)
-    .select('id')
-  if (claimError) throw new Error(`form link claim failed: ${claimError.message}`)
-  if (!claimed?.length) {
+  // One database call uses the link up and stores the message, together
+  // or not at all (`submit_form_link`, migration 041).
+  const submission = form.read(checked.answers)
+  const { data: stored, error } = await db.rpc('submit_form_link', {
+    p_id: link.id,
+    p_answers: checked.answers,
+    p_text: submission.text,
+  })
+  if (error) throw new Error(`form submit failed: ${error.message}`)
+  if (!stored) {
     // Another request got there first, or the link ran out meanwhile.
     return (await findFormLink(db, token)).status === 'submitted'
       ? { status: 'already' }
       : { status: 'gone' }
   }
 
-  const submission = form.read(checked.answers)
-  const { error: messageError } = await db.from('messages').insert({
-    conversation_id: link.conversation_id,
-    sender_type: 'customer',
-    content_type: 'text',
-    content_text: submission.text,
-    // Not a WhatsApp message id: the answers came through our own page.
-    message_id: `form:${link.id}`,
-    status: 'delivered',
-  })
-  if (messageError) {
-    // The answers must not be marked as sent when nobody can see them.
-    await db.from('form_links').update({ submitted_at: null, answers: null }).eq('id', link.id)
-    throw new Error(`form message insert failed: ${messageError.message}`)
-  }
-
+  const now = new Date().toISOString()
   const { data: conversation } = await db
     .from('conversations')
     .select('unread_count')

@@ -36,12 +36,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   // Before anything is stored under it as a rate-limit key.
   if (!isToken(token)) return NextResponse.json({ error: 'gone' }, { status: 410 })
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+  // The address is whatever the proxy in front of the app reports (as
+  // for the invite endpoints). With none there is nothing to tell
+  // callers apart by, and one shared bucket would lock every customer
+  // out together, so only the per-link limit applies.
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
   for (const result of [
-    checkRateLimit(`form:ip:${ip.slice(0, 64)}`, RATE_LIMITS.formSubmitIp),
+    ip ? checkRateLimit(`form:ip:${ip.slice(0, 64)}`, RATE_LIMITS.formSubmitIp) : null,
     checkRateLimit(`form:token:${hashToken(token)}`, RATE_LIMITS.formSubmitToken),
   ]) {
-    if (!result.success) return rateLimitResponse(result)
+    if (result && !result.success) return rateLimitResponse(result)
   }
 
   const body = await readCapped(request)

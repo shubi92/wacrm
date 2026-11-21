@@ -5,7 +5,7 @@
 // or chat id. Which chat, form and language it stands for is looked up
 // here, on the server, in `form_links` (migration 041), where only the
 // token's hash is kept. A link works for seven days and for one
-// submission.
+// submission; after sending it shows the answers until it runs out.
 // ============================================================
 
 import crypto from 'crypto'
@@ -81,7 +81,9 @@ export async function findFormLink(db: SupabaseClient, token: string): Promise<F
   if (error) throw new Error(`form link lookup failed: ${error.message}`)
   const link = data as FormLink | null
   if (!link) return { status: 'invalid' }
-  if (link.submitted_at) return { status: 'submitted', link }
+  // Sent or not, a link stops opening when it runs out: the address
+  // stays in a chat and a browser history long after the move.
   if (Date.parse(link.expires_at) <= Date.now()) return { status: 'invalid' }
+  if (link.submitted_at) return { status: 'submitted', link }
   return { status: 'open', link }
 }

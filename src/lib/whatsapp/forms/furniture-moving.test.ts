@@ -531,6 +531,8 @@ describe('text a customer could use to mislead the team', () => {
     expect(a.name).toBe('Noura')
     expect(a.notes).toBe('line one\nline two') // a note may run over lines
     expect(rejected({ ...WITHIN, name: '\u0000\u0001' })).toEqual({ name: 'required' })
+    // Direction overrides would make a line in the inbox read backwards.
+    expect(accepted({ ...WITHIN, name: '\u202eNoura\u2066' }).name).toBe('Noura')
   })
 
   it('keeps every answer on its own line, so a name cannot pass for another row', () => {

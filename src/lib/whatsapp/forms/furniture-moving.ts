@@ -357,8 +357,10 @@ export function validateMovingAnswers(raw: unknown, now = new Date()): MovingVal
       return
     }
     // Control characters have no place in an answer, and the database
-    // refuses some of them outright. Line breaks in a note are kept.
-    const s = v.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim()
+    // refuses some of them outright; the ones that flip text direction
+    // could make a line in the inbox read backwards. Line breaks in a
+    // note are kept.
+    const s = v.replace(/[\u0000-\u0008\u000b-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').trim()
     if (!s) {
       if (required) fields[key] = 'required'
     } else if ([...s].length > MAX_TEXT) {

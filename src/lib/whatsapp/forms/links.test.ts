@@ -111,15 +111,18 @@ describe('findFormLink', () => {
     expect(await findFormLink(db, token)).toEqual({ status: 'invalid' })
   })
 
-  it('reports a used link as submitted, with what was sent — even past its expiry', async () => {
+  it('reports a used link as submitted, with what was sent, until it runs out', async () => {
     vi.useFakeTimers()
     const { db, rows } = fakeDb()
     const token = tokenOf(await createFormLink(db, LINK))
     Object.assign(rows[0], { submitted_at: new Date().toISOString(), answers: { name: 'Noura' } })
-    vi.advanceTimersByTime(LINK_TTL_MS * 2)
     const state = await findFormLink(db, token)
     expect(state).toEqual({ status: 'submitted', link: rows[0] })
     expect(state.status === 'submitted' && state.link.answers).toEqual({ name: 'Noura' })
+    // The address outlives the move in a chat and a browser history:
+    // the answers must not stay readable behind it for good.
+    vi.advanceTimersByTime(LINK_TTL_MS + 1000)
+    expect(await findFormLink(db, token)).toEqual({ status: 'invalid' })
   })
 
   it('rejects a token with one character changed', async () => {

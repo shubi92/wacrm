@@ -13,12 +13,9 @@ export default async function FormPage({ params }: { params: Promise<{ token: st
   const state = await findFormLink(supabaseAdmin(), token)
   // The moving form is the only one with a page today.
   if (state.status === 'invalid' || state.link.form !== MOVING_FORM) return <Gone />
-  return (
-    <MovingForm
-      token={token}
-      lang={state.link.lang}
-      // Opened again after sending: show what was received, not a blank form.
-      sent={state.status === 'submitted' ? (state.link.answers ?? {}) : null}
-    />
-  )
+  // Opened again after sending: show what was received, not a blank
+  // form, in the language it was sent in.
+  const sent = state.status === 'submitted' ? (state.link.answers ?? {}) : null
+  const lang = sent?.lang === 'ar' || sent?.lang === 'en' ? sent.lang : state.link.lang
+  return <MovingForm token={token} lang={lang} sent={sent} />
 }
