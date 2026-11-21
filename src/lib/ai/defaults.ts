@@ -1,5 +1,6 @@
 import type { AiProvider } from './types'
 import { LEAD_SERVICES } from './lead'
+import { BOT_FORMS, FORM_SENT_NOTE, mentionsForms } from '@/lib/whatsapp/forms'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -102,6 +103,19 @@ export function buildSystemPrompt(args: {
         `A customer saying yes is itself a reason to hand off: do it exactly as described above (a short message ending with ${HANDOFF_SENTINEL} inside the reply tags), with "ready": true. ` +
         'If the business instructions below list questions to ask for a service, ask them before treating the customer as ready. ' +
         'The <lead> block is read by software and never shown to the customer: never put it inside the reply tags, and never write one on a turn where you are not handing off.',
+    )
+  }
+
+  // Only for an account whose instructions name a form — that is how an
+  // account switches forms on. The mechanism only, again: WHEN to send
+  // one is the account's call.
+  if (mode === 'auto_reply' && mentionsForms(userPrompt)) {
+    parts.push(
+      'Forms. The business can collect a customer\'s details with a form instead of typed questions. ' +
+        'Send one only when the business instructions below tell you to: write one short line inviting the customer to fill it in (inside the reply tags, like every message you write) and add [[FORM:name]] AFTER the closing </reply> tag, using the form name the instructions give. ' +
+        `Forms that exist: ${Object.keys(BOT_FORMS).join(', ')}. ` +
+        'A button that opens the form is attached to your line for you, so do not list or ask the form\'s questions yourself, and do not hand off on that turn — the customer\'s answers are passed to the team automatically once they send the form. ' +
+        `In the conversation, a line of yours that already went out with a form ends with ${FORM_SENT_NOTE}; never write that yourself, and do not send the same form twice.`,
     )
   }
 

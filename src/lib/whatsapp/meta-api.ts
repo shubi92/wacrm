@@ -1000,6 +1000,64 @@ export async function sendInteractiveList(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendInteractiveLinkArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  bodyText: string
+  /** Label of the button. Meta allows 20 characters. */
+  buttonLabel: string
+  /** Where the button goes. Opens in the phone's default web browser. */
+  url: string
+}
+
+/**
+ * Send a message with one button that opens a web address (Meta's
+ * "call-to-action URL button"), so the address itself never shows in
+ * the chat. Needs no template while the 24h customer window is open.
+ * Meta sends nothing back when the button is tapped.
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-cta-url-messages/
+ */
+export async function sendInteractiveLink(
+  args: SendInteractiveLinkArgs
+): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, bodyText, buttonLabel, url } = args
+  validateInteractiveBody(bodyText)
+  if (!buttonLabel || [...buttonLabel].length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+    throw new Error(
+      `Link button label must be 1-${INTERACTIVE_LIMITS.buttonTitleMaxLength} characters.`
+    )
+  }
+  if (!/^https:\/\/\S+$/.test(url)) throw new Error('Link button needs an https address.')
+
+  const response = await fetch(`${META_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body: { text: bodyText },
+        action: {
+          name: 'cta_url',
+          parameters: { display_text: buttonLabel, url },
+        },
+      },
+    }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 function validateInteractiveBody(bodyText: string): void {
   if (!bodyText) throw new Error('Interactive message requires bodyText.')
   if (bodyText.length > INTERACTIVE_LIMITS.bodyMaxLength) {

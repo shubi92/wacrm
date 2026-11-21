@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
+  engineSendLinkButton: vi.fn(),
+  createFormLink: vi.fn(),
   transcribeInboundVoiceNote: vi.fn(),
   sendVoiceReply: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
@@ -35,7 +37,11 @@ vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
 vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
-vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
+vi.mock('@/lib/flows/meta-send', () => ({
+  engineSendText: h.engineSendText,
+  engineSendLinkButton: h.engineSendLinkButton,
+}))
+vi.mock('@/lib/whatsapp/forms/links', () => ({ createFormLink: h.createFormLink }))
 vi.mock('./voice', () => ({
   transcribeInboundVoiceNote: h.transcribeInboundVoiceNote,
   sendVoiceReply: h.sendVoiceReply,
@@ -152,7 +158,8 @@ vi.mock('./admin-client', () => ({
   }),
 }))
 
-import { dispatchInboundToAiReply } from './auto-reply'
+import { dispatchFormSubmissionToAiReply, dispatchInboundToAiReply } from './auto-reply'
+import { BOT_FORMS } from '@/lib/whatsapp/forms'
 import { __resetRateLimitForTests } from '@/lib/rate-limit'
 
 const ARGS = {
@@ -165,6 +172,8 @@ const ARGS = {
 /** The standard line a customer gets when the bot hands off wordlessly. */
 const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
 const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+/** What `createFormLink` hands back: the address behind the form's button. */
+const FORM_URL = 'https://app.example/form/' + 'a'.repeat(43)
 const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
 /** A `messages` row sent to the customer on this chat `hours` ago. */
 const sentHoursAgo = (hours: number, overrides: Record<string, unknown> = {}) => ({
@@ -217,7 +226,12 @@ beforeEach(() => {
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
   h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true })
+  h.engineSendText.mockReset()
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
+  h.engineSendLinkButton.mockReset()
+  h.engineSendLinkButton.mockResolvedValue({ whatsapp_message_id: 'm2' })
+  h.createFormLink.mockReset()
+  h.createFormLink.mockResolvedValue(FORM_URL)
   h.transcribeInboundVoiceNote.mockReset()
   h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'ok', text: 'كم سعر التأشيرة؟' })
   h.sendVoiceReply.mockReset()
@@ -1117,5 +1131,205 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
     expect(h.state.outboundFilters.filter(([, col]) => col === 'ai_generated')).toHaveLength(
       h.state.outboundFilters.filter(([op]) => op === 'gte').length,
     ) // every messages lookup was the "others active" one
+  })
+})
+
+describe('dispatchInboundToAiReply — sending a form', () => {
+  const AR = 'يسعدنا نخدمك في النقل. اضغط الزر وعبّئ النموذج السريع.'
+  // An account switches forms on by naming one in its instructions.
+  const SCRIPT = 'For furniture moving, add [[FORM:furniture_moving]] after your reply.'
+  beforeEach(() => h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: SCRIPT })))
+
+  it('teaches the model about forms only on an account that uses them', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('Forms that exist: furniture_moving.')
+    h.generateReply.mockClear()
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).not.toContain('[[FORM')
+  })
+
+  it('sends plain text when the account never asked for forms, whatever the model wrote', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true, form: 'furniture_moving' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.createFormLink).not.toHaveBeenCalled()
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it('does not shut the chat when the form was delivered and only our record of it failed', async () => {
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    h.engineSendLinkButton.mockRejectedValue(new Error('sent to Meta but DB insert failed: timeout'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toBeNull() // still the bot's, so the answers get their handoff
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('sends its line with a button that opens the form, in the language of the line, in place of a text', async () => {
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    await dispatchInboundToAiReply(ARGS)
+    // A one-time link for this chat, opening in Arabic.
+    expect(h.createFormLink.mock.calls).toEqual([
+      [
+        expect.anything(),
+        { accountId: 'acct-1', conversationId: 'conv-1', contactId: 'contact-1', form: 'furniture_moving', lang: 'ar' },
+      ],
+    ])
+    expect(h.engineSendLinkButton.mock.calls).toEqual([
+      [
+        {
+          accountId: 'acct-1',
+          userId: 'user-1',
+          conversationId: 'conv-1',
+          contactId: 'contact-1',
+          bodyText: AR,
+          buttonLabel: 'افتح النموذج',
+          url: FORM_URL,
+          // Without this the bot would count its own form as "someone
+          // else is talking to this customer" and go quiet.
+          aiGenerated: true,
+        },
+      ],
+    ])
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toHaveLength(1) // a reply like any other: one slot
+    expect(h.state.updatePayload).toBeNull() // and no handoff
+  })
+
+  it('sends the English form for an English line', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Happy to help with your move.', handoff: false, tagged: true, form: 'furniture_moving' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.createFormLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ lang: 'en' }))
+    expect(h.engineSendLinkButton).toHaveBeenCalledWith(
+      expect.objectContaining({ buttonLabel: 'Open form', url: FORM_URL }),
+    )
+  })
+
+  it('obeys the test-number list like every other reply', async () => {
+    h.state.testNumbers = ['966511111111']
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.createFormLink).not.toHaveBeenCalled() // not even a link nobody will get
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
+  })
+
+  it('hands the chat to a person when the form cannot be sent', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Happy to help with your move.', handoff: false, tagged: true, form: 'furniture_moving' })
+    h.engineSendLinkButton.mockRejectedValue(new Error('Meta API error: 400'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain(
+      'could not send the form “furniture_moving” (Meta API error: 400). Please take over.',
+    )
+    expect(sentTexts()).toEqual([EN_LINE]) // never silence, never a promise of a button that is not there
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      'conversation.handed_off',
+      expect.objectContaining({ reason: 'other' }),
+    )
+  })
+
+  it('hands the chat to a person when the link itself cannot be made', async () => {
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    h.createFormLink.mockRejectedValue(new Error('NEXT_PUBLIC_SITE_URL is not set, so the form has no address'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled() // no button without somewhere to go
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain(
+      'could not send the form “furniture_moving” (NEXT_PUBLIC_SITE_URL is not set, so the form has no address). Please take over.',
+    )
+    expect(sentTexts()).toEqual([AR_LINE])
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      'conversation.handed_off',
+      expect.objectContaining({ reason: 'other' }),
+    )
+  })
+
+  it('a handoff on the same turn wins over the form', async () => {
+    h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true, tagged: true, form: 'furniture_moving', lead: null, ready: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(['A colleague will help.'])
+  })
+})
+
+describe('dispatchFormSubmissionToAiReply — the answers come back', () => {
+  const submission = BOT_FORMS.furniture_moving.read({
+    form: 'furniture_moving',
+    lang: 'en',
+    move_type: 'within',
+    city: 'riyadh',
+    from_district: 'Al Malqa',
+    to_district: 'Al Yasmin',
+    move_date: '2026-11-28',
+    qty_wardrobes: 3,
+    name: 'Noura',
+  })
+  const FORM_ARGS = { ...ARGS, fromPhone: '966500000000', submission }
+
+  it('thanks the customer and hands the chat over with the answers as the lead', async () => {
+    await dispatchFormSubmissionToAiReply(FORM_ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled() // nothing for the model to do
+    expect(h.state.rpcCalls).toEqual([]) // and no reply slot used
+    expect(h.state.updatePayload).toEqual({
+      ai_autoreply_disabled: true,
+      ai_handoff_summary: submission.note,
+    })
+    expect(sentTexts()).toEqual([
+      'Thank you, Noura. We received your moving details: Al Malqa to Al Yasmin, 28 Nov 2026, 1 kind of furniture and appliances. Our sales team will contact you shortly.',
+    ])
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ aiGenerated: true }))
+    expect(h.dispatchWebhookEvent.mock.calls).toEqual([
+      [
+        expect.anything(),
+        'acct-1',
+        'conversation.handed_off',
+        {
+          conversation_id: 'conv-1',
+          contact: { id: 'contact-1', phone: '966500000000', name: 'Sara' },
+          reason: 'customer_ready',
+          summary: submission.note,
+          handed_off_at: expect.any(String),
+          lead: submission.lead,
+        },
+      ],
+    ])
+    expect(submission.lead).toMatchObject({ service: 'furniture_moving', quoted_price_sar: null, customer_name: 'Noura' })
+  })
+
+  it('routes the chat to the configured person, like any handoff', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-9' }))
+    await dispatchFormSubmissionToAiReply(FORM_ARGS)
+    expect(h.state.updatePayload).toMatchObject({ assigned_agent_id: 'agent-9' })
+  })
+
+  it.each([
+    ['the bot is switched off', () => h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplyEnabled: false }))],
+    ['the customer is not a test number', () => (h.state.testNumbers = ['966511111111'])],
+    ['the bot is already paused on this chat', () => (h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true })],
+    ['a person has the chat', () => (h.state.conv = { ...h.state.conv, assigned_agent_id: 'agent-1' })],
+    ['a teammate is already talking to the customer', () => (h.state.messageRows = [sentHoursAgo(1, { sender_type: 'agent', ai_generated: false })])],
+  ])('stays out of it when %s: the answers are in the chat for whoever has it', async (_name, arrange) => {
+    arrange()
+    await dispatchFormSubmissionToAiReply(FORM_ARGS)
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('does not thank or notify when another handoff got there first', async () => {
+    h.state.handoffWon = false
+    await dispatchFormSubmissionToAiReply(FORM_ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('never throws', async () => {
+    h.loadAiConfig.mockRejectedValue(new Error('db down'))
+    await expect(dispatchFormSubmissionToAiReply(FORM_ARGS)).resolves.toBeUndefined()
   })
 })

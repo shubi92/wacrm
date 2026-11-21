@@ -1,0 +1,515 @@
+/* The customer form (/form/[token]). One narrow column, the way the
+   page opens from a WhatsApp button: sticky header (step + progress),
+   cards of big touch rows, sticky footer with the one next action.
+
+   Everything is scoped under .mf so nothing leaks into the app.
+   Colours: the business's green (accent) and red (errors only), on
+   neutral greys. Light or dark follows the phone. */
+.mf {
+  --bg: #f3f4f4;
+  --surface: #ffffff;
+  --ink: #16191a;
+  --muted: #5d6567;
+  --line: #d9dddd;
+  --accent: #1ea441;
+  --accent-ink: #ffffff;
+  --accent-soft: #e4f4e9;
+  --danger: #c4313d;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  color-scheme: light;
+
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-form), system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+@media (prefers-color-scheme: dark) {
+  .mf {
+    --bg: #0f1111;
+    --surface: #181b1b;
+    --ink: #eceeee;
+    --muted: #9ba2a3;
+    --line: #2c3132;
+    --accent-soft: #14301c;
+    --danger: #e0707a;
+    color-scheme: dark;
+  }
+}
+/* The page behind the column (and the rubber-band area on iOS). */
+html:has(.mf),
+body:has(.mf) {
+  background: #f3f4f4;
+}
+@media (prefers-color-scheme: dark) {
+  html:has(.mf),
+  body:has(.mf) {
+    background: #0f1111;
+  }
+}
+/* Room for the sticky header and footer when the browser scrolls a
+   focused field into view, so neither sits on top of it. */
+html:has(.mf) {
+  scroll-padding-block: 96px 132px;
+}
+
+.mf *,
+.mf *::before,
+.mf *::after {
+  box-sizing: border-box;
+}
+.mf button,
+.mf input,
+.mf select,
+.mf textarea {
+  font: inherit;
+  color: inherit;
+}
+.mf button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 140ms var(--ease-out);
+}
+.mf button:active {
+  transform: scale(0.97);
+}
+.mf button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.mf :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mf [hidden] {
+  display: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mf button,
+  .mf .bars i {
+    transition: none;
+  }
+}
+
+.mf .shell {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* ---------- header ---------- */
+.mf .top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-block: calc(12px + env(safe-area-inset-top, 0px)) 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mf .top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* The logo keeps its own colours, so it always sits on white. */
+.mf .mark {
+  flex: none;
+  width: 44px;
+  height: 40px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+.mf .mark img {
+  width: 34px;
+  height: auto;
+  display: block;
+}
+.mf .brand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mf .brand b {
+  font-weight: 600;
+  font-size: 15px;
+}
+.mf .brand span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.mf .lang {
+  flex: none;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+}
+.mf .bars {
+  display: flex;
+  gap: 5px;
+}
+.mf .bars i {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background-color 200ms ease;
+}
+.mf .bars i.on {
+  background: var(--accent);
+}
+
+/* ---------- body ---------- */
+.mf .body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-block: 8px 20px;
+}
+.mf .body h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 700;
+  text-wrap: balance;
+}
+.mf .step-no {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mf .help {
+  margin: -8px 0 2px;
+  color: var(--muted);
+}
+.mf .card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mf .card.list {
+  padding: 4px 14px;
+  gap: 0;
+}
+.mf .card > h2,
+.mf .sec-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.mf .sec-title {
+  padding-inline: 4px;
+  margin-bottom: -6px;
+}
+.mf fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.mf .fld {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.mf .fld > label,
+.mf .fld > legend,
+.mf .lbl {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0;
+}
+.mf .fld > legend {
+  margin-bottom: 6px;
+}
+.mf .opt {
+  font-weight: 400;
+  color: var(--muted);
+}
+.mf .fld input,
+.mf .fld select,
+.mf .fld textarea {
+  width: 100%;
+  min-height: 50px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+}
+.mf .card .fld input,
+.mf .card .fld select,
+.mf .card .fld textarea {
+  background: var(--bg);
+}
+.mf .fld textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+.mf .fld input:focus,
+.mf .fld select:focus,
+.mf .fld textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mf .bad input,
+.mf .bad select,
+.mf .bad textarea {
+  border-color: var(--danger);
+}
+.mf .err {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* option cards, chips, yes/no */
+.mf .cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.mf .cards button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: start;
+  padding: 14px;
+  min-height: 104px;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+}
+.mf .cards svg {
+  color: var(--muted);
+}
+.mf .cards b {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.3;
+}
+.mf .cards small {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.mf .chips {
+  display: flex;
+  gap: 8px;
+}
+.mf .chips button {
+  flex: 1;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.mf .cards button[aria-pressed='true'],
+.mf .chips button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.mf .cards button[aria-pressed='true'] svg {
+  color: var(--accent);
+}
+.mf .yn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.mf .yn .lbl {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.mf .yn .chips {
+  flex: 0 0 152px;
+}
+
+/* item rows with plus and minus */
+.mf .row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  border-bottom: 1px solid var(--line);
+}
+.mf .row:last-child {
+  border-bottom: 0;
+}
+.mf .row .name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15.5px;
+}
+.mf .row.has .name {
+  font-weight: 600;
+}
+/* − n + reads left to right in both languages. */
+.mf .stp {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  direction: ltr;
+}
+.mf .stp button {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+}
+.mf .stp .inc {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.mf .stp output {
+  min-width: 34px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+.mf .stp.zero .dec,
+.mf .stp.zero output {
+  display: none;
+}
+.mf .stp.zero .inc {
+  background: var(--bg);
+  border-color: var(--line);
+  color: var(--accent);
+}
+
+/* ---------- footer ---------- */
+.mf .foot {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding-block: 10px calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+}
+.mf .count {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.mf .foot .err {
+  text-align: center;
+}
+.mf .nav {
+  display: flex;
+  gap: 10px;
+}
+.mf .btn {
+  min-height: 52px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  padding: 0 22px;
+  font-weight: 600;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--ink);
+}
+/* White on the brand green needs large, bold type to stay readable. */
+.mf .btn.primary {
+  flex: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+/* ---------- sent / no longer valid ---------- */
+.mf .done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding-block: 18px 4px;
+}
+.mf .tick {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+.mf .done p {
+  margin: 0;
+  color: var(--muted);
+  max-width: 34ch;
+}
+.mf .sum {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(92px, 34%) minmax(0, 1fr);
+  gap: 10px 12px;
+  font-size: 14.5px;
+}
+.mf .sum dt {
+  color: var(--muted);
+}
+.mf .sum dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mf .actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mf .gone {
+  flex: 1;
+  justify-content: center;
+  gap: 18px;
+}
+.mf .gone .done + .done {
+  padding-top: 0;
+}

@@ -1,5 +1,6 @@
 import {
   sendInteractiveButtons,
+  sendInteractiveLink,
   sendInteractiveList,
   sendMediaMessage,
   sendTextMessage,
@@ -327,9 +328,34 @@ export async function engineSendInteractiveList(
   return sendInteractiveViaMeta({ ...args, kind: 'list' })
 }
 
+interface SendLinkButtonEngineArgs {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  bodyText: string
+  buttonLabel: string
+  /** Where the button goes. Sent to the customer, never stored: it can
+   *  hold a one-time token (see `@/lib/whatsapp/forms/links`). */
+  url: string
+  /** Marks the persisted row `ai_generated = true`, as in `engineSendText`. */
+  aiGenerated?: boolean
+}
+
+/**
+ * Send a line of text with one button that opens a web address — how
+ * the AI agent sends a form (see `@/lib/whatsapp/forms`).
+ */
+export async function engineSendLinkButton(
+  args: SendLinkButtonEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  return sendInteractiveViaMeta({ ...args, kind: 'link' })
+}
+
 type SendInput =
   | (SendInteractiveButtonsEngineArgs & { kind: 'buttons' })
   | (SendInteractiveListEngineArgs & { kind: 'list' })
+  | (SendLinkButtonEngineArgs & { kind: 'link' })
 
 async function sendInteractiveViaMeta(
   input: SendInput,
@@ -366,6 +392,17 @@ async function sendInteractiveViaMeta(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    if (input.kind === 'link') {
+      const r = await sendInteractiveLink({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        bodyText: input.bodyText,
+        buttonLabel: input.buttonLabel,
+        url: input.url,
+      })
+      return r.messageId
+    }
     if (input.kind === 'buttons') {
       const r = await sendInteractiveButtons({
         phoneNumberId: config.phone_number_id,
@@ -428,7 +465,18 @@ async function sendInteractiveViaMeta(
   // the inbox thread re-renders the buttons/rows the bot sent (round-
   // trip), matching the composer + automation send paths.
   const interactivePayload: InteractiveMessagePayload =
-    input.kind === 'buttons'
+    input.kind === 'link'
+      ? // ponytail: stored as a one-button message, so the inbox draws
+        // the button with the preview it already has — and without the
+        // address, which may be a customer's one-time link. Give link
+        // buttons their own payload kind if the inbox ever has to tell
+        // them apart from reply buttons.
+        {
+          kind: 'buttons',
+          body: input.bodyText,
+          buttons: [{ id: 'link', title: input.buttonLabel }],
+        }
+      : input.kind === 'buttons'
       ? {
           kind: 'buttons',
           body: input.bodyText,
@@ -453,6 +501,7 @@ async function sendInteractiveViaMeta(
     interactive_payload: interactivePayload,
     message_id: waMessageId,
     status: 'sent',
+    ai_generated: input.kind === 'link' && !!input.aiGenerated,
   })
   if (msgErr) {
     throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)

@@ -143,6 +143,39 @@ describe('parseGeneration', () => {
   })
 })
 
+describe('parseGeneration — a form to send with the reply', () => {
+  it('reads the form after the reply tags', () => {
+    expect(parseGeneration('<reply>Tap below to tell us about your move.</reply>[[FORM:furniture_moving]]')).toMatchObject({
+      text: 'Tap below to tell us about your move.',
+      form: 'furniture_moving',
+      handoff: false,
+      tagged: true,
+    })
+  })
+
+  it('never lets the marker reach the customer when it is inside the reply', () => {
+    expect(parseGeneration('<reply>Tap below. [[FORM:furniture_moving]]</reply>')).toMatchObject({
+      text: 'Tap below.',
+      form: 'furniture_moving',
+    })
+    expect(parseGeneration('<reply>Tap below. [[FORM:no_such_form]]</reply>')).toMatchObject({
+      text: 'Tap below.',
+      form: null,
+    })
+  })
+
+  it('does not take a form mentioned in reasoning before the reply', () => {
+    expect(parseGeneration('No need for [[FORM:furniture_moving]] here.<reply>Hello!</reply>')).toMatchObject({
+      text: 'Hello!',
+      form: null,
+    })
+  })
+
+  it('has no form on an ordinary reply', () => {
+    expect(parseGeneration('<reply>Hello!</reply>').form).toBeNull()
+  })
+})
+
 describe('parseGeneration — ready-customer <lead> block', () => {
   const MESSAGE = 'تمام، سيتواصل معك أحد أعضاء الفريق لتأكيد الموعد.'
   const LEAD = {

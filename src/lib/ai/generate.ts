@@ -9,6 +9,7 @@ import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
 import { hasLeadTag, maskLeadBlocks, parseLeadBlock } from './lead'
+import { takeFormMarker } from '@/lib/whatsapp/forms'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -95,7 +96,8 @@ function addUsage(a: AiUsage | null, b: AiUsage | null): AiUsage | null {
  * we treat the turn as a handoff and strip the marker from any remaining
  * text. A `<lead>` block (see `./lead`) carries what the bot collected
  * and whether the customer said yes (`ready` — a handoff in itself); it
- * is never part of the customer-visible text. `usage` is passed straight
+ * is never part of the customer-visible text. `[[FORM:name]]` asks for a
+ * form to go out with the reply (`form`). `usage` is passed straight
  * through (null when the provider didn't report it); `raw` is the output
  * untouched, for diagnostics.
  */
@@ -125,9 +127,12 @@ export function parseGeneration(
   // A whole block inside the reply is cut out cleanly. Any other trace of
   // a lead tag there (cut off, or broken by what a customer typed) means
   // reply and data can't be told apart — so nothing is sent.
-  const reply = body.split(LEAD_MARK).join('')
+  // `[[FORM:name]]`, in the reply or after it: send that form with this
+  // reply. Like the other markers it never reaches the customer.
+  const { form } = takeFormMarker(signals)
+  const reply = takeFormMarker(body.split(LEAD_MARK).join('')).text
   const text = hasLeadTag(reply) ? '' : reply.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, lead, ready, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
+  return { text, handoff, lead, ready, form, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
 }
 
 /** Stands in for a lead block while the output is parsed; never valid

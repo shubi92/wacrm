@@ -12,7 +12,14 @@ import {
 } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
-import { engineSendText } from '@/lib/flows/meta-send'
+import { engineSendLinkButton, engineSendText } from '@/lib/flows/meta-send'
+import {
+  BOT_FORMS,
+  formLang,
+  mentionsForms,
+  type FormSubmission,
+} from '@/lib/whatsapp/forms'
+import { createFormLink } from '@/lib/whatsapp/forms/links'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { isTestNumberAllowed } from './test-numbers'
 import {
@@ -90,6 +97,11 @@ interface DispatchArgs {
  *
  * Every handoff — cap, voice note, the model's own, or a customer who
  * said yes (with lead details) — fires `conversation.handed_off` once.
+ *
+ * The model can ask for a form to go out with its reply (when the
+ * account's instructions say so): its line is sent with a button that
+ * opens the form's page. The answers come back through
+ * `dispatchFormSubmissionToAiReply`, not here.
  *
  * A voice note passes the same gates, then is turned into text (only
  * when the account switched that on — otherwise silence, as before). If
@@ -221,7 +233,7 @@ export async function dispatchInboundToAiReply(
       resumed: !!conv.ai_resumed_at,
     })
 
-    const { text, handoff, lead, ready, leadUnreadable, usage, tagged, raw, retried } = await generateReply({
+    const { text, handoff, lead, ready, form, leadUnreadable, usage, tagged, raw, retried } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -354,6 +366,14 @@ export async function dispatchInboundToAiReply(
     if (!(await stillOursToAnswer(db, conversationId, conv.ai_resumed_at))) return
     if (!(await contactPassesTestNumbers(db, accountId, contactId))) return
 
+    // The model asked for a form: its reply is the line above the
+    // form's button. Nothing is read aloud — the button is the point.
+    // Only for an account whose own instructions name a form.
+    if (form && mentionsForms(config.systemPrompt)) {
+      await sendFormOrHandOff(db, { ...handoffBase, configOwnerUserId, form, text })
+      return
+    }
+
     await engineSendText({
       accountId,
       userId: configOwnerUserId,
@@ -377,6 +397,123 @@ export async function dispatchInboundToAiReply(
     }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
+  }
+}
+
+/**
+ * A customer sent a form from its page (see `@/lib/whatsapp/forms`).
+ * The answers are complete, so there is nothing for the model to do:
+ * the bot thanks the customer and hands the chat to a person, with the
+ * answers as the lead (`conversation.handed_off`, reason
+ * `customer_ready`). No model call, no reply slot used.
+ *
+ * Same ownership gates as a typed message. If the bot is off, limited
+ * to other test numbers, already paused here, or a person has the chat,
+ * it does nothing: the answers are in the thread for whoever is
+ * handling it. Owns its try/catch and never throws.
+ */
+export async function dispatchFormSubmissionToAiReply(
+  args: DispatchArgs & { submission: FormSubmission },
+): Promise<void> {
+  const { accountId, conversationId, contactId, configOwnerUserId, submission } = args
+  try {
+    const db = supabaseAdmin()
+
+    const config = await loadAiConfig(db, accountId)
+    if (!config || !config.autoReplyEnabled) return
+    if (!(await contactPassesTestNumbers(db, accountId, contactId))) return
+
+    const { data: conv, error } = await db
+      .from('conversations')
+      .select(CONV_COLUMNS)
+      .eq('id', conversationId)
+      .maybeSingle()
+    if (error || !conv || conv.assigned_agent_id || conv.ai_autoreply_disabled) return
+    if (await othersActiveOnThread(db, conversationId, conv.ai_resumed_at)) return
+
+    const { won, notified } = await handOff(db, {
+      accountId,
+      contactId,
+      conversationId,
+      config,
+      conv,
+      fromPhone: args.fromPhone,
+      reason: 'customer_ready',
+      lead: submission.lead,
+      summary: submission.note,
+    })
+    try {
+      if (won) {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: submission.thankYou,
+          aiGenerated: true,
+        })
+      }
+    } finally {
+      await notified
+    }
+  } catch (err) {
+    console.error('[ai auto-reply] form submission failed:', err)
+  }
+}
+
+/**
+ * Send the bot's line with the button that opens the form. If it can't
+ * go out the customer must not be met with silence: the chat goes to a
+ * person, as a moving request did before forms existed.
+ */
+async function sendFormOrHandOff(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: Omit<Parameters<typeof handOff>[1], 'reason' | 'summary'> & {
+    configOwnerUserId: string
+    form: string
+    text: string
+  },
+): Promise<void> {
+  const { accountId, conversationId, contactId, configOwnerUserId: userId, form } = args
+  try {
+    const lang = formLang(args.text)
+    const url = await createFormLink(db, { accountId, conversationId, contactId, form, lang })
+    await engineSendLinkButton({
+      accountId,
+      userId,
+      conversationId,
+      contactId,
+      bodyText: args.text,
+      buttonLabel: BOT_FORMS[form].button[lang],
+      url,
+      aiGenerated: true,
+    })
+    return
+  } catch (err) {
+    console.error(`[ai auto-reply] could not send the form ${form}:`, err)
+    const why = err instanceof Error ? err.message : String(err)
+    // The form reached the customer; only our own record of it failed.
+    // Handing off now would shut the chat before their answers arrive.
+    if (why.startsWith('sent to Meta')) return
+    const { won, notified } = await handOff(db, {
+      ...args,
+      reason: 'other',
+      summary: `🤖 AI agent handed off: it could not send the form “${form}” (${why.slice(0, 200)}). Please take over.`,
+    })
+    try {
+      if (won) {
+        await engineSendText({
+          accountId,
+          userId,
+          conversationId,
+          contactId,
+          text: handoffFallbackMessage(args.text),
+          aiGenerated: true,
+        })
+      }
+    } finally {
+      await notified
+    }
   }
 }
 
