@@ -207,6 +207,30 @@ describe('readMovingAnswers', () => {
     expect(Math.max(...a.rows.map((r) => [...r.value].length), [...a.area!].length)).toBe(300)
   })
 
+  // Captured from WhatsApp Manager's interactive preview of the draft
+  // (2026-11-21): untouched tick lists are left out, every hidden number
+  // list still sends its starting "1", unanswered optional fields are left out.
+  it("reads what Meta's own preview sends back", () => {
+    const a = readMovingAnswers({
+      form: 'furniture_moving', lang: 'en', quantities: 'ticked',
+      move_type: 'within', city: 'riyadh', from_district: 'Al Malqa', to_district: 'Al Yasmin',
+      move_date: '2026-11-21', from_floor: '2', to_floor: 'ground',
+      bedrooms: ['master', 'wardrobes'],
+      qty_master: '1', qty_kids_beds: '1', qty_wardrobes: '3', qty_sofas: '1', qty_majlis: '1',
+      qty_carpets: '1', qty_dining: '1', qty_chairs: '1', qty_side_tables: '1', qty_screens: '1',
+      qty_bookcase: '1', qty_desk: '1', qty_sports: '1',
+      appliances: ['fridge'],
+      qty_fridge: '1', qty_oven: '1', qty_freezer: '1', qty_washer: '1', qty_dryer: '1', qty_dishwasher: '1',
+      cabinets: 'no', pack_kitchen: 'yes',
+      ac_split: '0', ac_window: '0', curtains_roller: '0', curtains_fabric: '0',
+      name: 'Test', call_time: 'afternoon',
+    })
+    expect(row(a, 'Furniture')).toBe('Master bedroom ×1, Wardrobes ×3')
+    expect(row(a, 'Appliances')).toBe('Fridge ×1')
+    expect(row(a, 'Air conditioners')).toBe('0 split, 0 window')
+    expect(row(a, 'Items not in the list')).toBe('None')
+  })
+
   it('never throws on a form that came back nearly empty or odd', () => {
     // Objects where text or a number belongs must not break the reader.
     const odd = readMovingAnswers({ quantities: 'ticked', bedrooms: [{ toString: 1 }, 'master'], qty_master: { toString: 1 }, ac_split: [] })
