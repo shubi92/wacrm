@@ -19,7 +19,7 @@ interface Turn {
    *  its answer just couldn't be sent), and what it actually wrote. */
   choseHandoff?: boolean;
   raw?: string | null;
-  /** assistant-only: the WhatsApp form the bot would send with this reply. */
+  /** assistant-only: the form the bot would send with this reply. */
   form?: string | null;
 }
 

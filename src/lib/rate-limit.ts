@@ -148,6 +148,12 @@ export const RATE_LIMITS = {
    *  instance deploy needs the Redis swap described at the top of
    *  this file (the per-key call sites don't change). */
   publicApi: { limit: 120, windowMs: 60_000 },
+  /** A customer sending a form from /form/<token> (public). Per link:
+   *  enough to fix a few rejected answers and tap Send again. */
+  formSubmitToken: { limit: 10, windowMs: 10 * 60_000 },
+  /** The same, per IP. Loose, because one mobile-carrier address can
+   *  stand for many customers; a link's own token is the real key. */
+  formSubmitIp: { limit: 60, windowMs: 10 * 60_000 },
   /** AI draft-reply generation, per user. 20/min is generous for an
    *  agent clicking "Draft with AI" while working a thread, and bounds
    *  spend on the account's own LLM key against an accidental

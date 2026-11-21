@@ -378,8 +378,8 @@ whenever the bot knew the service or had at least one answer, and `null`
 when it had collected nothing (or the details could not be read).
 `customer_ready` always comes with a `lead`.
 
-A handoff also happens when a customer sends back a WhatsApp form the
-agent sent (see [whatsapp-forms](whatsapp-forms/README.md)): `reason` is
+A handoff also happens when a customer sends in a form the agent sent
+them (see [whatsapp-forms](whatsapp-forms/README.md)): `reason` is
 `customer_ready`, `quoted_price_sar` is `null`, and `details` holds the
 form's answers, one pair per line the sales rep sees. Unlike a typed
 conversation, those `question` labels are in English whatever the form's

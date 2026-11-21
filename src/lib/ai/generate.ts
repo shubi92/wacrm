@@ -97,7 +97,7 @@ function addUsage(a: AiUsage | null, b: AiUsage | null): AiUsage | null {
  * text. A `<lead>` block (see `./lead`) carries what the bot collected
  * and whether the customer said yes (`ready` — a handoff in itself); it
  * is never part of the customer-visible text. `[[FORM:name]]` asks for a
- * WhatsApp form to go out with the reply (`form`). `usage` is passed straight
+ * form to go out with the reply (`form`). `usage` is passed straight
  * through (null when the provider didn't report it); `raw` is the output
  * untouched, for diagnostics.
  */

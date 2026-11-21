@@ -1000,32 +1000,35 @@ export async function sendInteractiveList(
   return { messageId: data.messages[0].id }
 }
 
-export interface SendInteractiveFlowArgs {
+export interface SendInteractiveLinkArgs {
   phoneNumberId: string
   accessToken: string
   to: string
   bodyText: string
-  /** The Flow's name in WhatsApp Manager (must be published). */
-  flowName: string
-  /** Label of the button that opens the form. Meta advises 30
-   *  characters or fewer and no emoji. */
+  /** Label of the button. Meta allows 20 characters. */
   buttonLabel: string
-  /** Comes back with the answers, as `response_json.flow_token`. */
-  flowToken: string
+  /** Where the button goes. Opens in the phone's default web browser. */
+  url: string
 }
 
 /**
- * Send a WhatsApp Flow — a form that opens over the chat — as an
- * interactive message. Needs no template while the 24h customer window
- * is open. The answers come back on the messages webhook as
- * `interactive.nfm_reply`. (Unrelated to this app's own Flows engine.)
- * https://developers.facebook.com/docs/whatsapp/flows/guides/sendingaflow
+ * Send a message with one button that opens a web address (Meta's
+ * "call-to-action URL button"), so the address itself never shows in
+ * the chat. Needs no template while the 24h customer window is open.
+ * Meta sends nothing back when the button is tapped.
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-cta-url-messages/
  */
-export async function sendInteractiveFlow(
-  args: SendInteractiveFlowArgs
+export async function sendInteractiveLink(
+  args: SendInteractiveLinkArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, bodyText, flowName, buttonLabel, flowToken } = args
+  const { phoneNumberId, accessToken, to, bodyText, buttonLabel, url } = args
   validateInteractiveBody(bodyText)
+  if (!buttonLabel || [...buttonLabel].length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+    throw new Error(
+      `Link button label must be 1-${INTERACTIVE_LIMITS.buttonTitleMaxLength} characters.`
+    )
+  }
+  if (!/^https:\/\/\S+$/.test(url)) throw new Error('Link button needs an https address.')
 
   const response = await fetch(`${META_API_BASE}/${phoneNumberId}/messages`, {
     method: 'POST',
@@ -1039,16 +1042,11 @@ export async function sendInteractiveFlow(
       to,
       type: 'interactive',
       interactive: {
-        type: 'flow',
+        type: 'cta_url',
         body: { text: bodyText },
         action: {
-          name: 'flow',
-          parameters: {
-            flow_message_version: '3',
-            flow_name: flowName,
-            flow_cta: buttonLabel,
-            flow_token: flowToken,
-          },
+          name: 'cta_url',
+          parameters: { display_text: buttonLabel, url },
         },
       },
     }),

@@ -111,7 +111,7 @@ export function buildSystemPrompt(args: {
   // one is the account's call.
   if (mode === 'auto_reply' && mentionsForms(userPrompt)) {
     parts.push(
-      'Forms. The business can collect a customer\'s details with a WhatsApp form instead of typed questions. ' +
+      'Forms. The business can collect a customer\'s details with a form instead of typed questions. ' +
         'Send one only when the business instructions below tell you to: write one short line inviting the customer to fill it in (inside the reply tags, like every message you write) and add [[FORM:name]] AFTER the closing </reply> tag, using the form name the instructions give. ' +
         `Forms that exist: ${Object.keys(BOT_FORMS).join(', ')}. ` +
         'A button that opens the form is attached to your line for you, so do not list or ask the form\'s questions yourself, and do not hand off on that turn — the customer\'s answers are passed to the team automatically once they send the form. ' +

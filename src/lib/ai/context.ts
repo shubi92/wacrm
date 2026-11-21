@@ -17,7 +17,7 @@ interface DbMessage {
  * templates, interactive) are excluded — they carry no text to model.
  *
  * One interactive message does count: the bot's own line that went out
- * with a WhatsApp form's button. Without it the bot can't see that it
+ * with a form's button. Without it the bot can't see that it
  * already sent the form, and sends it again. It is marked so the bot can
  * tell it from a plain line.
  *

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERACTIVE_LIMITS,
   sendInteractiveButtons,
-  sendInteractiveFlow,
+  sendInteractiveLink,
   sendInteractiveList,
   sendTemplateMessage,
 } from "./meta-api";
@@ -143,64 +143,134 @@ describe("sendInteractiveButtons — validation", () => {
   });
 });
 
-describe("sendInteractiveFlow", () => {
+describe("sendInteractiveLink", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("sends a WhatsApp form by its name, with the button and the token", async () => {
-    let body: unknown = null;
+  const LINK = {
+    ...BASE_ARGS,
+    buttonLabel: "Open form",
+    url: "https://example.com/form/abc_DEF-123",
+  } as const;
+
+  it("sends the line with one button that opens the address", async () => {
+    let url = "";
+    let init: RequestInit = {};
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: string, init: RequestInit) => {
-        body = JSON.parse(String(init.body));
+      vi.fn(async (u: string, i: RequestInit) => {
+        url = u;
+        init = i;
         return new Response(
-          JSON.stringify({ messages: [{ id: "wamid.FORM" }] }),
+          JSON.stringify({ messages: [{ id: "wamid.LINK" }] }),
           { status: 200 },
         );
       }),
     );
 
-    const result = await sendInteractiveFlow({
-      ...BASE_ARGS,
-      flowName: "furniture_moving_en",
-      buttonLabel: "Open form",
-      flowToken: "furniture_moving:en",
-    });
+    const result = await sendInteractiveLink(LINK);
 
-    expect(result).toEqual({ messageId: "wamid.FORM" });
-    expect(body).toEqual({
+    expect(result).toEqual({ messageId: "wamid.LINK" });
+    expect(url).toMatch(/\/test-phone\/messages$/);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer test-token" });
+    expect(JSON.parse(String(init.body))).toEqual({
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to: "1234567890",
       type: "interactive",
       interactive: {
-        type: "flow",
+        type: "cta_url",
         body: { text: "Body text" },
         action: {
-          name: "flow",
+          name: "cta_url",
           parameters: {
-            flow_message_version: "3",
-            flow_name: "furniture_moving_en",
-            flow_cta: "Open form",
-            flow_token: "furniture_moving:en",
+            display_text: "Open form",
+            url: "https://example.com/form/abc_DEF-123",
           },
         },
       },
     });
   });
 
-  it("refuses an empty message before calling Meta", async () => {
-    vi.stubGlobal("fetch", vi.fn(neverFetch));
+  it("accepts an Arabic label of exactly 20 characters", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ messages: [{ id: "wamid.AR" }] }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const label = "ن".repeat(INTERACTIVE_LIMITS.buttonTitleMaxLength);
     await expect(
-      sendInteractiveFlow({
-        ...BASE_ARGS,
-        bodyText: "",
-        flowName: "furniture_moving_en",
-        buttonLabel: "Open form",
-        flowToken: "t",
-      }),
-    ).rejects.toThrow(/bodyText/);
+      sendInteractiveLink({ ...LINK, buttonLabel: label }),
+    ).resolves.toEqual({ messageId: "wamid.AR" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("refuses before calling Meta", () => {
+    beforeEach(() => {
+      vi.stubGlobal("fetch", vi.fn(neverFetch));
+    });
+
+    it("an empty message", async () => {
+      await expect(
+        sendInteractiveLink({ ...LINK, bodyText: "" }),
+      ).rejects.toThrow(/bodyText/);
+    });
+
+    it("a message over Meta's body limit", async () => {
+      await expect(
+        sendInteractiveLink({
+          ...LINK,
+          bodyText: "x".repeat(INTERACTIVE_LIMITS.bodyMaxLength + 1),
+        }),
+      ).rejects.toThrow(/1024/);
+    });
+
+    it("an empty button label", async () => {
+      await expect(
+        sendInteractiveLink({ ...LINK, buttonLabel: "" }),
+      ).rejects.toThrow(/label must be 1-20 characters/);
+    });
+
+    it("a button label longer than 20 chars (Meta cap)", async () => {
+      await expect(
+        sendInteractiveLink({
+          ...LINK,
+          buttonLabel: "x".repeat(INTERACTIVE_LIMITS.buttonTitleMaxLength + 1),
+        }),
+      ).rejects.toThrow(/label must be 1-20 characters/);
+    });
+
+    it.each([
+      "http://example.com/form/abc",
+      "example.com/form/abc",
+      "javascript:alert(1)",
+      "https://",
+      "https://example.com/form/a b",
+      " https://example.com/form/abc",
+      "",
+    ])("an address that is not a plain https one (%j)", async (bad) => {
+      await expect(
+        sendInteractiveLink({ ...LINK, url: bad }),
+      ).rejects.toThrow(/https address/);
+    });
+  });
+
+  it("passes Meta's own error on", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: "Re-engagement message" } }),
+            { status: 400 },
+          ),
+      ),
+    );
+    await expect(sendInteractiveLink(LINK)).rejects.toThrow(/Re-engagement message/);
   });
 });
 

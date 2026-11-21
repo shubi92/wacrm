@@ -1,23 +1,74 @@
 // ============================================================
-// WhatsApp forms (Meta "WhatsApp Flows") the AI agent can send, and
-// reading what the customer sends back.
+// Forms the AI agent can send: a web page of our own that the customer
+// opens from a link button in the WhatsApp chat.
 //
-// Out:  the bot writes `[[FORM:<name>]]` after its reply; we send the
-//       Flow named `<name>_ar` or `<name>_en` (as published in WhatsApp
-//       Manager) with the reply as the message and an "Open form" button.
-// Back: one `interactive.nfm_reply` message whose `response_json` holds
-//       every answer. Meta does not say which Flow it came from, so the
-//       form names itself in its own payload (`form`, `lang`).
+// Out:  the bot writes `[[FORM:<name>]]` after its reply; its line goes
+//       out with an "Open form" button whose link holds a one-time
+//       token (./links) and opens /form/<token>.
+// Back: the page posts the answers to /api/forms/<token>; ./submit
+//       checks them, stores them as one message in the chat, and the
+//       bot thanks the customer and hands the chat over.
 //
-// Add a form: its definition file + one entry in `read` and `BOT_FORMS`.
+// Add a form: its definition file + one entry in `BOT_FORMS`, and its
+// page under /form/[token].
 // ============================================================
 
 import type { HandoffLead } from '@/lib/ai/lead'
-import { MOVING_FORM, readMovingAnswers, type FormLang } from './furniture-moving'
+import {
+  MOVING_FORM,
+  readMovingAnswers,
+  validateMovingAnswers,
+  type FieldError,
+  type FormLang,
+} from './furniture-moving'
 
-/** Forms the bot may send, with the label of the button that opens them. */
-export const BOT_FORMS: Record<string, { button: Record<FormLang, string> }> = {
-  [MOVING_FORM]: { button: { en: 'Open form', ar: 'افتح النموذج' } },
+/** A submitted form, ready for the inbox and the handoff. */
+export interface FormSubmission {
+  form: string
+  /** What the inbox shows for the customer's answers. */
+  text: string
+  /** Sent to the customer in the chat once the answers are in. */
+  thankYou: string
+  /** The internal handoff note. */
+  note: string
+  lead: HandoffLead
+}
+
+interface BotForm {
+  /** Label of the button that opens the form (Meta allows 20 characters). */
+  button: Record<FormLang, string>
+  /** Check what the browser sent; only clean answers come back. */
+  validate: (
+    raw: unknown,
+  ) => { ok: true; answers: Record<string, unknown> } | { ok: false; fields: Record<string, FieldError> }
+  /** Clean answers → what the team and the customer are told. */
+  read: (answers: Record<string, unknown>) => FormSubmission
+}
+
+/** Forms the bot may send. */
+export const BOT_FORMS: Record<string, BotForm> = {
+  [MOVING_FORM]: {
+    button: { en: 'Open form', ar: 'افتح النموذج' },
+    validate: validateMovingAnswers,
+    read: (answers) => {
+      const a = readMovingAnswers(answers)
+      const facts = ['furniture moving', a.name, a.area, a.date].filter(Boolean).join(', ')
+      return {
+        form: MOVING_FORM,
+        text: ['📋 Furniture moving form', ...a.rows.map((r) => `${r.label}: ${r.value}`)].join('\n'),
+        thankYou: a.thankYou,
+        note: `🤖 AI agent handed off: the customer sent the furniture moving form. Customer is ready: ${facts}. The answers are in the chat.`,
+        lead: {
+          service: 'furniture_moving',
+          details: a.rows.map((r) => ({ question: r.label, answer: r.value })),
+          quoted_price_sar: null,
+          customer_name: a.name,
+          area: a.area,
+          preferred_date: a.date,
+        },
+      }
+    },
+  },
 }
 
 /** `[[FORM:furniture_moving]]` in the model's output. */
@@ -43,101 +94,6 @@ export function takeFormMarker(text: string): { form: string | null; text: strin
   return { form, text: text.replace(FORM_LIKE, '') }
 }
 
-/** Arabic script in the bot's line → the Arabic form. */
+/** Arabic script in the bot's line → the form opens in Arabic. */
 export const formLang = (replyText: string): FormLang =>
   /[؀-ۿ]/.test(replyText) ? 'ar' : 'en'
-
-/** What goes to Meta for one form in one language. */
-export function formMessage(form: string, lang: FormLang) {
-  return {
-    /** The Flow's name in WhatsApp Manager. */
-    flowName: `${form}_${lang}`,
-    buttonLabel: BOT_FORMS[form].button[lang],
-    /** Comes back with the answers; a second way to tell the form. */
-    flowToken: `${form}:${lang}`,
-  }
-}
-
-/** A submitted form we know how to read. */
-export interface FormSubmission {
-  form: string
-  /** Sent to the customer once the answers are in. */
-  thankYou: string
-  /** The internal handoff note. */
-  note: string
-  lead: HandoffLead
-}
-
-// The answers are customer-supplied: bound what an unknown form can
-// put in the inbox.
-const MAX_TEXT = 300
-const MAX_LINES = 40
-
-/**
- * Read a form reply. `text` is what the inbox shows for the message —
- * always something readable, even for a form we don't know.
- * `submission` is set only for a form we do know.
- */
-export function readFormResponse(responseJson: unknown): {
-  text: string
-  submission: FormSubmission | null
-} {
-  // Customer-supplied data on the webhook path: whatever it holds, the
-  // message must still be stored.
-  try {
-    return read(responseJson)
-  } catch {
-    return { text: UNREADABLE, submission: null }
-  }
-}
-
-const UNREADABLE = '📋 Form response (could not be read)'
-
-function read(responseJson: unknown): { text: string; submission: FormSubmission | null } {
-  let answers: Record<string, unknown> | null = null
-  try {
-    const parsed = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      answers = parsed as Record<string, unknown>
-    }
-  } catch {
-    // falls through: not JSON
-  }
-  if (!answers) return { text: UNREADABLE, submission: null }
-
-  // The form's own `form` field, or the token we sent it with.
-  const token = typeof answers.flow_token === 'string' ? answers.flow_token : ''
-  const [tokenForm, tokenLang] = token.split(':')
-  const form = typeof answers.form === 'string' ? answers.form : tokenForm
-
-  if (form === MOVING_FORM) {
-    const a = readMovingAnswers({ ...answers, lang: answers.lang ?? tokenLang })
-    const facts = ['furniture moving', a.name, a.area, a.date].filter(Boolean).join(', ')
-    return {
-      text: ['📋 Furniture moving form', ...a.rows.map((r) => `${r.label}: ${r.value}`)].join('\n'),
-      submission: {
-        form,
-        thankYou: a.thankYou,
-        note: `🤖 AI agent handed off: the customer sent the furniture moving form. Customer is ready: ${facts}. The answers are in the chat.`,
-        lead: {
-          service: 'furniture_moving',
-          details: a.rows.map((r) => ({ question: r.label, answer: r.value })),
-          quoted_price_sar: null,
-          customer_name: a.name,
-          area: a.area,
-          preferred_date: a.date,
-        },
-      },
-    }
-  }
-
-  // A form this build does not know: show what came, as it came.
-  const lines = Object.entries(answers)
-    .filter(([key]) => key !== 'flow_token')
-    .slice(0, MAX_LINES)
-    .map(([key, value]) => {
-      const shown = typeof value === 'string' ? value : JSON.stringify(value)
-      return `${key.slice(0, 60)}: ${[...String(shown ?? '').slice(0, 4 * MAX_TEXT)].slice(0, MAX_TEXT).join('')}`
-    })
-  return { text: ['📋 Form response', ...lines].join('\n'), submission: null }
-}

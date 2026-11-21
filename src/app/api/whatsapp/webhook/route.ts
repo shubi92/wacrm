@@ -11,7 +11,7 @@ import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
-import { dispatchFormSubmissionToAiReply, dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   handleTemplateWebhookChange,
@@ -602,10 +602,8 @@ async function processMessage(
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, interactiveReplyId, formSubmission } =
+  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
     await parseMessageContent(message, accessToken)
-  // A submitted WhatsApp form (see `@/lib/whatsapp/forms`).
-  const isFormReply = message.interactive?.type === 'nfm_reply'
 
   // Resolve swipe-reply context if present. A missing parent is fine —
   // we just store NULL and the UI renders the message without a quote.
@@ -641,9 +639,7 @@ async function processMessage(
     'text', 'image', 'document', 'audio', 'video',
     'location', 'template', 'interactive',
   ])
-  const contentType = isFormReply
-    ? 'text' // the answers, as readable lines — not a button tap
-    : ALLOWED_CONTENT_TYPES.has(message.type)
+  const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
     ? message.type
     : message.type === 'sticker'
       ? 'image'   // stickers are images
@@ -690,9 +686,7 @@ async function processMessage(
   const { error: convError } = await supabaseAdmin()
     .from('conversations')
     .update({
-      // A form's answers run to many lines; the list shows its title.
-      last_message_text:
-        (isFormReply ? contentText?.split('\n')[0] : contentText) || `[${message.type}]`,
+      last_message_text: contentText || `[${message.type}]`,
       last_message_at: new Date().toISOString(),
       unread_count: (conversation.unread_count || 0) + 1,
       updated_at: new Date().toISOString(),
@@ -727,11 +721,7 @@ async function processMessage(
   // no active flows take the runner's early-exit "no_match" path
   // basically for free (one indexed SELECT for the active run).
   // ============================================================
-  // A submitted form skips the runner and the keyword triggers below:
-  // its text is the form's own labels plus the customer's answers, so a
-  // Flow or automation keyed on a word like "moving" or "yes" would fire
-  // on every submission (and, by consuming it, cancel the handoff).
-  const flowResult = isFormReply ? { consumed: false } : await dispatchInboundToFlows({
+  const flowResult = await dispatchInboundToFlows({
     accountId,
     userId: configOwnerUserId,
     contactId: contactRecord.id,
@@ -768,7 +758,7 @@ async function processMessage(
   )[] = []
   // Content-level triggers are suppressed when a flow consumed the
   // message — see the comment block above.
-  if (!flowConsumed && !isFormReply) {
+  if (!flowConsumed) {
     automationTriggers.push('new_message_received', 'keyword_match')
     // Interactive tap → fire the interactive_reply trigger too (only
     // meaningful when a button/list reply actually arrived). Enables
@@ -810,21 +800,7 @@ async function processMessage(
   const voiceNote = inboundText.trim()
     ? undefined
     : inboundVoiceNote(message, accessToken)
-  if (isFormReply) {
-    // The answers are not a message to reply to: the bot thanks the
-    // customer and hands the chat, with the answers, to a person. A form
-    // we can't read just sits in the inbox.
-    if (formSubmission) {
-      await dispatchFormSubmissionToAiReply({
-        accountId,
-        conversationId: conversation.id,
-        contactId: contactRecord.id,
-        configOwnerUserId,
-        fromPhone: message.from,
-        submission: formSubmission,
-      })
-    }
-  } else if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote)) {
+  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote)) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,

@@ -8,7 +8,8 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
-  engineSendFlowForm: vi.fn(),
+  engineSendLinkButton: vi.fn(),
+  createFormLink: vi.fn(),
   transcribeInboundVoiceNote: vi.fn(),
   sendVoiceReply: vi.fn(),
   dispatchWebhookEvent: vi.fn(),
@@ -38,8 +39,9 @@ vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({
   engineSendText: h.engineSendText,
-  engineSendFlowForm: h.engineSendFlowForm,
+  engineSendLinkButton: h.engineSendLinkButton,
 }))
+vi.mock('@/lib/whatsapp/forms/links', () => ({ createFormLink: h.createFormLink }))
 vi.mock('./voice', () => ({
   transcribeInboundVoiceNote: h.transcribeInboundVoiceNote,
   sendVoiceReply: h.sendVoiceReply,
@@ -157,7 +159,7 @@ vi.mock('./admin-client', () => ({
 }))
 
 import { dispatchFormSubmissionToAiReply, dispatchInboundToAiReply } from './auto-reply'
-import { readFormResponse } from '@/lib/whatsapp/forms'
+import { BOT_FORMS } from '@/lib/whatsapp/forms'
 import { __resetRateLimitForTests } from '@/lib/rate-limit'
 
 const ARGS = {
@@ -170,6 +172,8 @@ const ARGS = {
 /** The standard line a customer gets when the bot hands off wordlessly. */
 const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
 const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+/** What `createFormLink` hands back: the address behind the form's button. */
+const FORM_URL = 'https://app.example/form/' + 'a'.repeat(43)
 const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
 /** A `messages` row sent to the customer on this chat `hours` ago. */
 const sentHoursAgo = (hours: number, overrides: Record<string, unknown> = {}) => ({
@@ -224,8 +228,10 @@ beforeEach(() => {
   h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true })
   h.engineSendText.mockReset()
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
-  h.engineSendFlowForm.mockReset()
-  h.engineSendFlowForm.mockResolvedValue({ whatsapp_message_id: 'm2' })
+  h.engineSendLinkButton.mockReset()
+  h.engineSendLinkButton.mockResolvedValue({ whatsapp_message_id: 'm2' })
+  h.createFormLink.mockReset()
+  h.createFormLink.mockResolvedValue(FORM_URL)
   h.transcribeInboundVoiceNote.mockReset()
   h.transcribeInboundVoiceNote.mockResolvedValue({ status: 'ok', text: 'كم سعر التأشيرة؟' })
   h.sendVoiceReply.mockReset()
@@ -1128,7 +1134,7 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
   })
 })
 
-describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
+describe('dispatchInboundToAiReply — sending a form', () => {
   const AR = 'يسعدنا نخدمك في النقل. اضغط الزر وعبّئ النموذج السريع.'
   // An account switches forms on by naming one in its instructions.
   const SCRIPT = 'For furniture moving, add [[FORM:furniture_moving]] after your reply.'
@@ -1147,22 +1153,30 @@ describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
     h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false, tagged: true, form: 'furniture_moving' })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendFlowForm).not.toHaveBeenCalled()
+    expect(h.createFormLink).not.toHaveBeenCalled()
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
     expect(sentTexts()).toEqual(['Hello!'])
   })
 
   it('does not shut the chat when the form was delivered and only our record of it failed', async () => {
     h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
-    h.engineSendFlowForm.mockRejectedValue(new Error('sent to Meta but DB insert failed: timeout'))
+    h.engineSendLinkButton.mockRejectedValue(new Error('sent to Meta but DB insert failed: timeout'))
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toBeNull() // still the bot's, so the answers get their handoff
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('sends the form the model asked for, in the language of its line, in place of a text', async () => {
+  it('sends its line with a button that opens the form, in the language of the line, in place of a text', async () => {
     h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendFlowForm.mock.calls).toEqual([
+    // A one-time link for this chat, opening in Arabic.
+    expect(h.createFormLink.mock.calls).toEqual([
+      [
+        expect.anything(),
+        { accountId: 'acct-1', conversationId: 'conv-1', contactId: 'contact-1', form: 'furniture_moving', lang: 'ar' },
+      ],
+    ])
+    expect(h.engineSendLinkButton.mock.calls).toEqual([
       [
         {
           accountId: 'acct-1',
@@ -1170,9 +1184,8 @@ describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
           conversationId: 'conv-1',
           contactId: 'contact-1',
           bodyText: AR,
-          flowName: 'furniture_moving_ar',
           buttonLabel: 'افتح النموذج',
-          flowToken: 'furniture_moving:ar',
+          url: FORM_URL,
           // Without this the bot would count its own form as "someone
           // else is talking to this customer" and go quiet.
           aiGenerated: true,
@@ -1187,8 +1200,9 @@ describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
   it('sends the English form for an English line', async () => {
     h.generateReply.mockResolvedValue({ text: 'Happy to help with your move.', handoff: false, tagged: true, form: 'furniture_moving' })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendFlowForm).toHaveBeenCalledWith(
-      expect.objectContaining({ flowName: 'furniture_moving_en', buttonLabel: 'Open form' }),
+    expect(h.createFormLink).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ lang: 'en' }))
+    expect(h.engineSendLinkButton).toHaveBeenCalledWith(
+      expect.objectContaining({ buttonLabel: 'Open form', url: FORM_URL }),
     )
   })
 
@@ -1196,16 +1210,37 @@ describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
     h.state.testNumbers = ['966511111111']
     h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendFlowForm).not.toHaveBeenCalled()
+    expect(h.createFormLink).not.toHaveBeenCalled() // not even a link nobody will get
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
   })
 
   it('hands the chat to a person when the form cannot be sent', async () => {
     h.generateReply.mockResolvedValue({ text: 'Happy to help with your move.', handoff: false, tagged: true, form: 'furniture_moving' })
-    h.engineSendFlowForm.mockRejectedValue(new Error('Flow not found'))
+    h.engineSendLinkButton.mockRejectedValue(new Error('Meta API error: 400'))
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
-    expect(h.state.updatePayload?.ai_handoff_summary).toMatch(/could not send the form “furniture_moving_en” \(Flow not found\)/)
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain(
+      'could not send the form “furniture_moving” (Meta API error: 400). Please take over.',
+    )
     expect(sentTexts()).toEqual([EN_LINE]) // never silence, never a promise of a button that is not there
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'acct-1',
+      'conversation.handed_off',
+      expect.objectContaining({ reason: 'other' }),
+    )
+  })
+
+  it('hands the chat to a person when the link itself cannot be made', async () => {
+    h.generateReply.mockResolvedValue({ text: AR, handoff: false, tagged: true, form: 'furniture_moving' })
+    h.createFormLink.mockRejectedValue(new Error('NEXT_PUBLIC_SITE_URL is not set, so the form has no address'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled() // no button without somewhere to go
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain(
+      'could not send the form “furniture_moving” (NEXT_PUBLIC_SITE_URL is not set, so the form has no address). Please take over.',
+    )
+    expect(sentTexts()).toEqual([AR_LINE])
     expect(h.dispatchWebhookEvent).toHaveBeenCalledWith(
       expect.anything(),
       'acct-1',
@@ -1217,26 +1252,23 @@ describe('dispatchInboundToAiReply — sending a WhatsApp form', () => {
   it('a handoff on the same turn wins over the form', async () => {
     h.generateReply.mockResolvedValue({ text: 'A colleague will help.', handoff: true, tagged: true, form: 'furniture_moving', lead: null, ready: false })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendFlowForm).not.toHaveBeenCalled()
+    expect(h.engineSendLinkButton).not.toHaveBeenCalled()
     expect(sentTexts()).toEqual(['A colleague will help.'])
   })
 })
 
 describe('dispatchFormSubmissionToAiReply — the answers come back', () => {
-  const submission = readFormResponse(
-    JSON.stringify({
-      form: 'furniture_moving',
-      lang: 'en',
-      move_type: 'within',
-      city: 'riyadh',
-      from_district: 'Al Malqa',
-      to_district: 'Al Yasmin',
-      move_date: '2026-11-28',
-      bedrooms: ['wardrobes'],
-      qty_wardrobes: '3',
-      name: 'Noura',
-    }),
-  ).submission!
+  const submission = BOT_FORMS.furniture_moving.read({
+    form: 'furniture_moving',
+    lang: 'en',
+    move_type: 'within',
+    city: 'riyadh',
+    from_district: 'Al Malqa',
+    to_district: 'Al Yasmin',
+    move_date: '2026-11-28',
+    qty_wardrobes: 3,
+    name: 'Noura',
+  })
   const FORM_ARGS = { ...ARGS, fromPhone: '966500000000', submission }
 
   it('thanks the customer and hands the chat over with the answers as the lead', async () => {

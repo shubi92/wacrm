@@ -1,63 +1,60 @@
-# WhatsApp forms
+# Forms the AI agent sends
 
-A WhatsApp form (Meta calls it a "WhatsApp Flow") opens over the chat, the
-customer fills it in, and the answers come back as one message. It has
-nothing to do with the **Flows** menu in this app, which is the automation
-builder.
-
-The AI agent can send a form instead of asking typed questions. When the
-customer sends it back, the agent thanks them and hands the chat to a
+The AI agent can send a form instead of asking typed questions. The
+customer gets one short line with an **Open form** button, fills in a page
+of ours, and taps Send. The agent then thanks them and hands the chat to a
 person with every answer attached.
+
+The form is a web page in this app (`/form/<token>`), opened by a WhatsApp
+link button. It is not a Meta "WhatsApp Flow", and it has nothing to do
+with the **Flows** menu in this app, which is the automation builder.
 
 ## Forms in this repo
 
-| Form               | Files                                                        |
-| ------------------ | ------------------------------------------------------------ |
-| `furniture_moving` | `furniture_moving_ar.json`, `furniture_moving_en.json`       |
+| Form               | Definition                                   | Page                         |
+| ------------------ | -------------------------------------------- | ---------------------------- |
+| `furniture_moving` | `src/lib/whatsapp/forms/furniture-moving.ts` | `src/app/form/[token]/`      |
 
-The JSON files are generated from `src/lib/whatsapp/forms/furniture-moving.ts`,
-which also reads the answers. Never edit the JSON by hand; change the
-definition and run:
+The definition is the single source: the page draws its four steps from
+it, the server checks the answers against it, and the same file turns the
+answers into the lines the sales rep reads. The page is Arabic,
+right to left, with an English switch; it opens in the language of the
+agent's line. Branding (logo, colours, the WhatsApp number behind "Back to
+WhatsApp") is a set of constants beside the definition, because only one
+business uses forms today.
 
-```bash
-UPDATE_FORMS=1 npx vitest run src/lib/whatsapp/forms
-```
+## One-time setup
 
-## One-time setup for an account
-
-1. In WhatsApp Manager → Account tools → Flows, create a Flow named exactly
-   `furniture_moving_ar`. Open its JSON editor, replace everything with the
-   contents of `furniture_moving_ar.json`, and save. The editor reports any
-   error and shows a preview you can click through.
-2. Do the same for `furniture_moving_en` with `furniture_moving_en.json`.
-3. Send each draft to your own phone from the builder and check it.
-4. Publish both. A form can only be sent to customers once it is published.
-5. Tell the AI agent when to send it, in **AI Agents → Business context &
-   instructions**. For example:
+1. Run migration `041_form_links.sql`.
+2. Make sure `NEXT_PUBLIC_SITE_URL` is set to the site's public `https://`
+   address. The agent builds the form's link from it. Without it the agent
+   cannot send the form and hands the chat to a person instead.
+3. Tell the AI agent when to send the form, in **AI Agents → Business
+   context & instructions**. For example:
 
    > When a customer wants furniture moving, do not ask questions and do
    > not mention any price. Reply with one short line inviting them to
    > fill in the form, and add `[[FORM:furniture_moving]]` after your reply.
    > If they write instead of opening the form, hand off.
 
-The agent sends the Arabic form when its own line is in Arabic and the
-English one otherwise. Nothing else needs to be configured in this app:
-the form is found by its name, and naming a form in the instructions
-(`[[FORM:…]]`) is what switches forms on for the account. Without it the
-agent is never told forms exist and never sends one.
+Naming a form in the instructions (`[[FORM:…]]`) is what switches forms on
+for the account. Without it the agent is never told forms exist and never
+sends one.
 
 ## What happens
 
 1. Customer asks about moving → the agent sends its one line with an
    **Open form** button. This uses one of the agent's replies for the chat.
-2. Customer fills the four screens and taps Send.
-3. The answers appear in the inbox as one message, in this order: customer,
-   move, from, to, date, furniture, items not in the list, appliances,
-   kitchen cabinets, pack kitchenware, air conditioners, curtains, call
-   time, notes.
-4. The agent sends a short thank-you (no price) and hands the chat over.
-   Connected systems get `conversation.handed_off` with `reason:
-   "customer_ready"` and the answers in `lead.details`
+   The button opens the page in the phone's default web browser (that is
+   what Meta documents for a link button).
+2. Customer fills the four steps and taps Send, and sees a "received"
+   screen with a summary and a **Back to WhatsApp** button.
+3. The answers appear in the inbox as one message, in this order: name,
+   move, from, to, date, furniture, not in the list, appliances, kitchen
+   cabinets, pack kitchenware, air conditioners, curtains, call time, notes.
+4. The agent sends a short thank-you in the chat (no price) and hands the
+   chat over. Connected systems get `conversation.handed_off` with
+   `reason: "customer_ready"` and the answers in `lead.details`
    (see [public-api.md](../public-api.md)).
 
 If the agent is switched off, paused on that chat, or a person already has
@@ -66,21 +63,32 @@ but nothing else happens: no thank-you and no `conversation.handed_off`.
 That includes a customer who typed after getting the form, was handed
 off, and filled the form in later.
 
-A submitted form never starts a Flow or a keyword automation.
+If the form cannot be sent, the agent hands the chat to a person and the
+inbox note says why.
 
-If the form cannot be sent (for example no form is published under that
-name), the agent hands the chat to a person and the inbox note says why.
+## The link
+
+- The address holds only a random token: no phone number, name or chat id.
+  The server looks up which chat it belongs to. Only a hash of the token is
+  stored, and the link is not kept in the inbox message.
+- It works for 7 days and for one submission. Opened again after sending,
+  it shows the "received" screen. An unknown, altered or expired link shows
+  a plain "this link is no longer valid, please message us on WhatsApp".
+- Sending is a public endpoint (`POST /api/forms/<token>`), so the server
+  trusts nothing from the browser: every choice must be one of the form's
+  options, every count a whole number from 0 to 20, every text 300
+  characters or fewer, the date not in the past. The body is capped at
+  16 KB and sends are rate-limited per link and per IP address.
 
 ## Limits worth knowing
 
-- WhatsApp caps labels at 20 characters on text fields and dropdowns and 30
-  on tick lists, so long questions carry a shorter label. WhatsApp adds
-  "(optional)" itself to any field that is not required.
-- Forms are a single column: the "how many" list for a ticked item appears
-  under its group, not beside the item.
-- A published form cannot be edited in WhatsApp Manager. A changed form
-  means publishing a new one.
-- If WhatsApp on a phone does not show and hide the "how many" lists the
-  way Meta's preview does, build the fallback (every item has a number list
-  starting at 0): `buildMovingFlowJson(lang, 'all')`. The answers are read
-  the same way.
+- The thank-you is an ordinary WhatsApp message, so Meta only delivers it
+  inside the 24-hour window after the customer's last message. A customer
+  who sends the form days later still sees the "received" screen, and the
+  chat is still handed over.
+- A form submission is not a WhatsApp message: it does not fire
+  `message.received`, a Flow, or a keyword automation.
+- If the agent sends the form twice in one chat, both links work until one
+  is used or they expire.
+- Answers are not saved on the phone while the customer is filling the
+  form in. Closing the page before sending loses them.

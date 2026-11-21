@@ -12,13 +12,14 @@ import {
 } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
-import { engineSendFlowForm, engineSendText } from '@/lib/flows/meta-send'
+import { engineSendLinkButton, engineSendText } from '@/lib/flows/meta-send'
 import {
+  BOT_FORMS,
   formLang,
-  formMessage,
   mentionsForms,
   type FormSubmission,
 } from '@/lib/whatsapp/forms'
+import { createFormLink } from '@/lib/whatsapp/forms/links'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { isTestNumberAllowed } from './test-numbers'
 import {
@@ -97,8 +98,9 @@ interface DispatchArgs {
  * Every handoff — cap, voice note, the model's own, or a customer who
  * said yes (with lead details) — fires `conversation.handed_off` once.
  *
- * The model can ask for a WhatsApp form to go out with its reply (when
- * the account's instructions say so). The answers come back through
+ * The model can ask for a form to go out with its reply (when the
+ * account's instructions say so): its line is sent with a button that
+ * opens the form's page. The answers come back through
  * `dispatchFormSubmissionToAiReply`, not here.
  *
  * A voice note passes the same gates, then is turned into text (only
@@ -399,7 +401,7 @@ export async function dispatchInboundToAiReply(
 }
 
 /**
- * A customer sent back a WhatsApp form (see `@/lib/whatsapp/forms`).
+ * A customer sent a form from its page (see `@/lib/whatsapp/forms`).
  * The answers are complete, so there is nothing for the model to do:
  * the bot thanks the customer and hands the chat to a person, with the
  * answers as the lead (`conversation.handed_off`, reason
@@ -460,10 +462,9 @@ export async function dispatchFormSubmissionToAiReply(
 }
 
 /**
- * Send the bot's line with the form's button. If the form can't go out
- * — most likely no Flow is published under that name in WhatsApp
- * Manager — the customer must not be met with silence: the chat goes to
- * a person, as a moving request did before forms existed.
+ * Send the bot's line with the button that opens the form. If it can't
+ * go out the customer must not be met with silence: the chat goes to a
+ * person, as a moving request did before forms existed.
  */
 async function sendFormOrHandOff(
   db: ReturnType<typeof supabaseAdmin>,
@@ -473,23 +474,23 @@ async function sendFormOrHandOff(
     text: string
   },
 ): Promise<void> {
-  const { accountId, conversationId, contactId, configOwnerUserId: userId } = args
-  let flowName = args.form
+  const { accountId, conversationId, contactId, configOwnerUserId: userId, form } = args
   try {
-    const message = formMessage(args.form, formLang(args.text))
-    flowName = message.flowName
-    await engineSendFlowForm({
+    const lang = formLang(args.text)
+    const url = await createFormLink(db, { accountId, conversationId, contactId, form, lang })
+    await engineSendLinkButton({
       accountId,
       userId,
       conversationId,
       contactId,
       bodyText: args.text,
-      ...message,
+      buttonLabel: BOT_FORMS[form].button[lang],
+      url,
       aiGenerated: true,
     })
     return
   } catch (err) {
-    console.error(`[ai auto-reply] could not send the form ${flowName}:`, err)
+    console.error(`[ai auto-reply] could not send the form ${form}:`, err)
     const why = err instanceof Error ? err.message : String(err)
     // The form reached the customer; only our own record of it failed.
     // Handing off now would shut the chat before their answers arrive.
@@ -497,7 +498,7 @@ async function sendFormOrHandOff(
     const { won, notified } = await handOff(db, {
       ...args,
       reason: 'other',
-      summary: `🤖 AI agent handed off: it could not send the form “${flowName}” (${why.slice(0, 200)}). Is a form published under that name in WhatsApp Manager? Please take over.`,
+      summary: `🤖 AI agent handed off: it could not send the form “${form}” (${why.slice(0, 200)}). Please take over.`,
     })
     try {
       if (won) {

@@ -108,7 +108,7 @@ export async function POST(request: Request) {
       // it counts the customer as having said yes.
       lead: handsOff ? lead : null,
       ready,
-      // The WhatsApp form the live bot would attach to this reply.
+      // The form the live bot would attach to this reply.
       form: handsOff ? null : form,
     })
   } catch (err) {

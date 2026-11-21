@@ -1,6 +1,5 @@
 import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import type { InboundVoiceNote } from '@/lib/ai/voice'
-import { readFormResponse, type FormSubmission } from '@/lib/whatsapp/forms'
 
 // Turns one inbound Meta message into what we store. Lives outside
 // route.ts because a route file may only export route handlers and
@@ -26,13 +25,9 @@ export interface WhatsAppMessage {
    * to advance the per-contact run.
    */
   interactive?: {
-    type: 'button_reply' | 'list_reply' | 'nfm_reply'
+    type: 'button_reply' | 'list_reply'
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
-    /** A submitted WhatsApp form (a Meta "WhatsApp Flow"). `response_json`
-     *  is a JSON *string* holding every answer plus the `flow_token` we
-     *  sent; Meta does not include the Flow's id or name. */
-    nfm_reply?: { name?: string; body?: string; response_json?: string }
   }
   /**
    * Set when the customer taps a QUICK_REPLY button on a *template* we sent.
@@ -76,11 +71,6 @@ export async function parseMessageContent(
    * tap with the right affordance. Null for everything else.
    */
   interactiveReplyId: string | null
-  /**
-   * Set when the message is a submitted WhatsApp form we know how to
-   * read; `contentText` then holds the answers as readable lines.
-   */
-  formSubmission: FormSubmission | null
 }> {
   // getMediaUrl signature is (mediaId, accessToken) — earlier code had
   // the args swapped, so every verification hit an invalid Meta URL and
@@ -108,7 +98,6 @@ export async function parseMessageContent(
     mediaUrl: null,
     mediaType: null,
     interactiveReplyId: null,
-    formSubmission: null,
   }
 
   switch (message.type) {
@@ -186,15 +175,6 @@ export async function parseMessageContent(
       return { ...empty, contentText: message.reaction?.emoji || null }
 
     case 'interactive': {
-      // A submitted form is not a tap: it carries no reply id (nothing
-      // for the Flows engine or an automation to route on), and its text
-      // is the customer's answers, laid out for the person who reads them.
-      if (message.interactive?.type === 'nfm_reply') {
-        const { text, submission } = readFormResponse(
-          message.interactive.nfm_reply?.response_json
-        )
-        return { ...empty, contentText: text, formSubmission: submission }
-      }
       // The customer tapped a reply button or a list row on a message
       // we previously sent. Meta delivers `interactive.button_reply` for
       // 3-button messages and `interactive.list_reply` for list messages.
