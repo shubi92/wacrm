@@ -176,6 +176,52 @@ describe('parseGeneration — a form to send with the reply', () => {
   })
 })
 
+describe('parseGeneration — a menu to put under the reply', () => {
+  it('reads the menu after the reply tags', () => {
+    expect(parseGeneration('<reply>أهلاً</reply>[[MENU:services]]')).toMatchObject({
+      text: 'أهلاً',
+      menu: 'services',
+      form: null,
+      handoff: false,
+      tagged: true,
+    })
+  })
+
+  it('never lets the marker reach the customer when it is inside the reply', () => {
+    expect(parseGeneration('<reply>أهلاً، كيف نخدمك؟ [[MENU:services]]</reply>')).toMatchObject({
+      text: 'أهلاً، كيف نخدمك؟',
+      menu: 'services',
+    })
+    expect(parseGeneration('<reply>Hello! [[MENU:no_such_menu]]</reply>')).toMatchObject({
+      text: 'Hello!',
+      menu: null,
+    })
+  })
+
+  it('does not take a menu mentioned in reasoning before the reply', () => {
+    expect(parseGeneration('No need for [[MENU:services]] here.<reply>Hello!</reply>')).toMatchObject({
+      text: 'Hello!',
+      menu: null,
+    })
+  })
+
+  it('has no menu on an ordinary reply, or on one that only sends a form', () => {
+    expect(parseGeneration('<reply>Hello!</reply>').menu).toBeNull()
+    expect(parseGeneration('<reply>Tap below.</reply>[[FORM:furniture_moving]]').menu).toBeNull()
+  })
+
+  it('reports a form and a menu on the same reply, and strips both markers', () => {
+    expect(
+      parseGeneration('<reply>Hello! [[MENU:services]] Tap below. [[FORM:furniture_moving]]</reply>'),
+    ).toMatchObject({ text: 'Hello!  Tap below.', form: 'furniture_moving', menu: 'services' })
+    expect(parseGeneration('<reply>Hello!</reply>[[FORM:furniture_moving]] [[MENU:services]]')).toMatchObject({
+      text: 'Hello!',
+      form: 'furniture_moving',
+      menu: 'services',
+    })
+  })
+})
+
 describe('parseGeneration — ready-customer <lead> block', () => {
   const MESSAGE = 'تمام، سيتواصل معك أحد أعضاء الفريق لتأكيد الموعد.'
   const LEAD = {

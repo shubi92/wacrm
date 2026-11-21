@@ -1,6 +1,7 @@
 import type { AiProvider } from './types'
 import { LEAD_SERVICES } from './lead'
 import { BOT_FORMS, FORM_SENT_NOTE, mentionsForms } from '@/lib/whatsapp/forms'
+import { BOT_MENUS, menuSentNote, mentionsMenus } from '@/lib/whatsapp/menus'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -116,6 +117,17 @@ export function buildSystemPrompt(args: {
         `Forms that exist: ${Object.keys(BOT_FORMS).join(', ')}. ` +
         'A button that opens the form is attached to your line for you, so do not list or ask the form\'s questions yourself, and do not hand off on that turn — the customer\'s answers are passed to the team automatically once they send the form. ' +
         `In the conversation, a line of yours that already went out with a form ends with ${FORM_SENT_NOTE}; never write that yourself, and do not send the same form twice.`,
+    )
+  }
+
+  // The same for menus: only for an account whose instructions name one.
+  if (mode === 'auto_reply' && mentionsMenus(userPrompt)) {
+    parts.push(
+      'Menus. The business can put a tap-to-choose menu under one of your lines, so the customer picks an option instead of typing. ' +
+        'Send one only when the business instructions below tell you to: write one short line (inside the reply tags, like every message you write) and add [[MENU:name]] AFTER the closing </reply> tag, using the menu name the instructions give. ' +
+        `Menus that exist: ${Object.keys(BOT_MENUS).join(', ')}. ` +
+        'A button that opens the menu is attached to your line for you, so do not list its options yourself. The option the customer taps arrives as their next message. ' +
+        `In the conversation, a line of yours that already went out with a menu ends with ${menuSentNote('name')}; never write that yourself, and do not send the same menu twice.`,
     )
   }
 

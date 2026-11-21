@@ -299,6 +299,9 @@ interface SendInteractiveListEngineArgs {
   sections: InteractiveListSection[]
   headerText?: string
   footerText?: string
+  /** Marks the persisted row `ai_generated = true`, as in `engineSendText`.
+   *  Set by the auto-reply bot for a menu under one of its lines. */
+  aiGenerated?: boolean
 }
 
 /**
@@ -501,7 +504,7 @@ async function sendInteractiveViaMeta(
     interactive_payload: interactivePayload,
     message_id: waMessageId,
     status: 'sent',
-    ai_generated: input.kind === 'link' && !!input.aiGenerated,
+    ai_generated: input.kind !== 'buttons' && !!input.aiGenerated,
   })
   if (msgErr) {
     throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)

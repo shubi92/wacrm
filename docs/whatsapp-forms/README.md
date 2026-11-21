@@ -81,6 +81,29 @@ inbox note says why.
   characters or fewer, the date not in the past. The body is capped at
   16 KB and sends are rate-limited per link and per IP address.
 
+## Menus
+
+The agent can also put a tap-to-choose menu under one of its lines: a
+WhatsApp list message, one button that opens a list of up to ten
+options. Menus are defined in `src/lib/whatsapp/menus.ts`, each with a
+name, in Arabic and English (chosen by the language of the agent's
+line). Today there is one, `services`.
+
+Switch it on the same way as a form, by naming it in the agent's
+instructions. For example:
+
+> If the customer only greets you, greet back in ONE short line and add
+> `[[MENU:services]]` after your reply. Do not list our services yourself.
+
+- The option the customer taps comes back as an ordinary message whose
+  text is the option's title (for example "نقل عفش"), so the rest of the
+  instructions apply to it as if it had been typed.
+- Each menu goes out once per chat. After that, or if WhatsApp refuses
+  the list, the agent's line is sent as plain text. Nobody is handed off
+  because a menu could not be sent.
+- Connected systems get the tap as a normal `message.received` with
+  `interactive_reply_id` set to `menu:services:<option>`.
+
 ## Limits worth knowing
 
 - The thank-you is an ordinary WhatsApp message, so Meta only delivers it

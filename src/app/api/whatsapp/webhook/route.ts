@@ -12,6 +12,7 @@ import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import { isMenuReplyId } from '@/lib/whatsapp/menus'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   handleTemplateWebhookChange,
@@ -800,7 +801,11 @@ async function processMessage(
   const voiceNote = inboundText.trim()
     ? undefined
     : inboundVoiceNote(message, accessToken)
-  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote)) {
+  // A tap is not the bot's to answer (it belongs to the Flow, automation
+  // or template that showed the buttons) unless it is on a menu the bot
+  // itself sent: that one is the customer's answer to the bot.
+  const forTheBot = !interactiveReplyId || isMenuReplyId(interactiveReplyId)
+  if (!flowConsumed && forTheBot && (inboundText.trim() || voiceNote)) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,

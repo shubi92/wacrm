@@ -85,7 +85,7 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff, lead, ready, form, tagged, raw, retried } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff, lead, ready, form, menu, tagged, raw, retried } = await generateReply({ config, systemPrompt, messages })
     // Same disposition as the live bot (auto-reply.ts): only a complete
     // <reply> block is ever sent, and empty/untagged output hands off —
     // with the standard hand-off line in place of the unusable text, which
@@ -110,6 +110,8 @@ export async function POST(request: Request) {
       ready,
       // The form the live bot would attach to this reply.
       form: handsOff ? null : form,
+      // The menu the live bot would put under this reply.
+      menu: handsOff || form ? null : menu,
     })
   } catch (err) {
     if (err instanceof AiError) {

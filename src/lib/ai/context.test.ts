@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildConversationContext } from './context'
+import { menuMessage } from '@/lib/whatsapp/menus'
 
 /** Minimal fake matching the query chain in buildConversationContext:
  *  from().select().eq().in().not().order().limit() → { data, error }.
@@ -105,5 +106,108 @@ describe('buildConversationContext', () => {
       { role: 'assistant', content: 'Tap below. [form sent]' },
       { role: 'user', content: 'ok' },
     ])
+  })
+
+  it("shows the bot its own menu, marked with its name, and the option the customer tapped", async () => {
+    // The list as it is stored with the bot's message, and its last row.
+    const services = menuMessage('services', 'ar')
+    const moving = services.sections[0].rows.at(-1)!
+    const rows = [
+      // newest first
+      // The form's button is stored as a one-button message.
+      {
+        sender_type: 'bot',
+        content_type: 'interactive',
+        content_text: 'اضغط الزر وعبّئ النموذج.',
+        ai_generated: true,
+        interactive_payload: { kind: 'buttons' },
+      },
+      // The customer's tap on the bot's menu: their answer, as text.
+      {
+        sender_type: 'customer',
+        content_type: 'interactive',
+        content_text: moving.title,
+        interactive_reply_id: moving.id,
+      },
+      // The bot's greeting that went out with the services menu.
+      {
+        sender_type: 'bot',
+        content_type: 'interactive',
+        content_text: 'أهلاً بك، كيف نخدمك؟',
+        ai_generated: true,
+        interactive_payload: { kind: 'list', body: 'أهلاً بك، كيف نخدمك؟', button_label: services.buttonLabel, sections: services.sections },
+      },
+      { sender_type: 'customer', content_text: 'السلام عليكم' },
+    ]
+    expect(moving.id).toBe('menu:services:furniture_moving')
+    expect(await buildConversationContext(fakeDb(rows), 'conv-1')).toEqual([
+      { role: 'user', content: 'السلام عليكم' },
+      { role: 'assistant', content: 'أهلاً بك، كيف نخدمك؟ [menu sent: services]' },
+      { role: 'user', content: moving.title },
+      { role: 'assistant', content: 'اضغط الزر وعبّئ النموذج. [form sent]' },
+    ])
+  })
+
+  it('names the menu from the rows it was sent with, whichever menu that is', async () => {
+    const list = (id: string) => ({
+      sender_type: 'bot',
+      content_type: 'interactive',
+      content_text: 'Pick one',
+      ai_generated: true,
+      interactive_payload: { kind: 'list', sections: [{ rows: [{ id, title: 'A' }] }] },
+    })
+    const out = await buildConversationContext(
+      // newest first
+      fakeDb([
+        // A list of the bot's with rows that are no menu's, or none at
+        // all: still marked as something it sent, the way a form is.
+        { ...list('plan_basic'), content_text: 'Third' },
+        { ...list('menu:offers:ramadan'), content_text: 'Second' },
+        { ...list('menu:services:villas'), content_text: 'First', interactive_payload: { kind: 'list' } },
+      ]),
+      'conv-1',
+    )
+    expect(out.map((m) => m.content)).toEqual([
+      'First [form sent]',
+      'Second [menu sent: offers]',
+      'Third [form sent]',
+    ])
+  })
+
+  it("leaves out taps and lists that are not the bot's own", async () => {
+    const rows = [
+      { sender_type: 'customer', content_text: 'thanks' },
+      // A survey tap, and a tap whose id only looks a little like a menu's.
+      { sender_type: 'customer', content_type: 'interactive', content_text: 'Excellent', interactive_reply_id: 'csat_5' },
+      { sender_type: 'customer', content_type: 'interactive', content_text: 'Menu', interactive_reply_id: 'main_menu:open' },
+      { sender_type: 'customer', content_type: 'interactive', content_text: 'No id', interactive_reply_id: null },
+      // A Flow's list and a teammate's list: sent, but not by the auto-reply bot.
+      {
+        sender_type: 'bot',
+        content_type: 'interactive',
+        content_text: 'Pick a plan',
+        ai_generated: false,
+        interactive_payload: { kind: 'list', sections: menuMessage('services', 'en').sections },
+      },
+      {
+        sender_type: 'agent',
+        content_type: 'interactive',
+        content_text: 'Choose a slot',
+        ai_generated: true,
+        interactive_payload: { kind: 'list', sections: menuMessage('services', 'en').sections },
+      },
+    ]
+    expect(await buildConversationContext(fakeDb(rows), 'conv-1')).toEqual([{ role: 'user', content: 'thanks' }])
+  })
+
+  it('asks the database for what tells a menu and its tap apart', async () => {
+    let columns = ''
+    const db = fakeDb([]) as unknown as { select: (c: string) => unknown }
+    const select = db.select
+    db.select = (c: string) => ((columns = c), select(c))
+    await buildConversationContext(db as unknown as SupabaseClient, 'conv-1')
+    expect(columns.split(',').map((c) => c.trim())).toEqual(
+      expect.arrayContaining(['ai_generated', 'interactive_reply_id', 'interactive_payload']),
+    )
   })
 })

@@ -64,6 +64,36 @@ describe('buildSystemPrompt — a handoff always carries a message', () => {
   })
 })
 
+describe('buildSystemPrompt — menus', () => {
+  const SCRIPT = 'If the customer only greets you, greet back in one short line and add [[MENU:services]] after your reply.'
+
+  it('teaches the model about menus only on an account whose instructions name one', () => {
+    const prompt = buildSystemPrompt({ userPrompt: SCRIPT, mode: 'auto_reply' })
+    expect(prompt).toContain('Menus. ')
+    expect(prompt).toContain('Menus that exist: services.')
+    expect(prompt).toContain('add [[MENU:name]] AFTER the closing </reply> tag')
+    expect(prompt).toContain('ends with [menu sent: name]')
+    // The mechanism comes before the account's own rules, which say when.
+    expect(prompt.indexOf('Menus. ')).toBeLessThan(prompt.indexOf('Business context and instructions:'))
+  })
+
+  it.each([
+    ['the instructions do not name a menu', USER_PROMPT],
+    ['the instructions name only a form', 'For moving add [[FORM:furniture_moving]] after your reply.'],
+    ['there are no instructions', null],
+  ])('says nothing about menus when %s', (_name, userPrompt) => {
+    const prompt = buildSystemPrompt({ userPrompt, mode: 'auto_reply' })
+    expect(prompt).not.toContain('Menus. ')
+    expect(prompt).not.toContain('Menus that exist')
+  })
+
+  it('says nothing about menus when drafting for a person, who cannot send one', () => {
+    const prompt = buildSystemPrompt({ userPrompt: SCRIPT, mode: 'draft' })
+    expect(prompt).not.toContain('Menus. ')
+    expect(prompt).not.toContain('Menus that exist')
+  })
+})
+
 describe('max auto-replies per conversation', () => {
   it('30 saves, 31 is trimmed to 30, 0 becomes 1', () => {
     expect(clampMaxAutoReplies(30)).toBe(30)
