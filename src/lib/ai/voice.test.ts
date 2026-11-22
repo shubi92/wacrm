@@ -42,6 +42,7 @@ function voiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
     geminiApiKey: 'gemini-test',
     elevenLabsApiKey: 'eleven-test',
     elevenLabsVoiceId: 'voice-1',
+    replySpeed: 0.9,
     ...overrides,
   }
 }
@@ -206,6 +207,7 @@ describe('sendVoiceReply', () => {
         apiKey: 'eleven-test',
         voiceId: 'voice-1',
         text: 'السعر 300 ريال',
+        speed: 0.9,
         outputFormat: 'opus-test',
       }),
     )
@@ -238,6 +240,25 @@ describe('sendVoiceReply', () => {
     expect(h.engineSendMedia).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'audio', voice: false, aiGenerated: true }),
     )
+  })
+
+  it('speaks at the account’s own speed', async () => {
+    h.loadVoiceConfig.mockResolvedValue(voiceConfig({ replySpeed: 1.08 }))
+    await sendVoiceReply(fakeDb(), SPEAK)
+    expect(h.synthesizeSpeech).toHaveBeenCalledTimes(1)
+    expect(h.synthesizeSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({ speed: 1.08, outputFormat: 'opus-test' }),
+    )
+  })
+
+  it('keeps that speed for the MP3 fallback too', async () => {
+    h.loadVoiceConfig.mockResolvedValue(voiceConfig({ replySpeed: 1.08 }))
+    h.inspectOggOpus.mockReturnValue(NOT_OGG)
+    await sendVoiceReply(fakeDb(), SPEAK)
+    expect(h.synthesizeSpeech.mock.calls.map((c) => [c[0].outputFormat, c[0].speed])).toEqual([
+      ['opus-test', 1.08],
+      ['mp3-test', 1.08],
+    ])
   })
 
   it('sends stereo Ogg/Opus without the voice-note flag', async () => {

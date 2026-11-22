@@ -71,6 +71,38 @@ const VOICE_OFF = {
   geminiApiKey: null,
   elevenLabsApiKey: null,
   elevenLabsVoiceId: null,
+  replySpeed: 0.9,
+}
+
+/**
+ * The voice settings and the speaking speed are two reads of `ai_configs`
+ * (the speed is migration 042's column, read on its own): this answers
+ * each by the columns it asks for, and records what was asked.
+ */
+function voiceDb(
+  voiceRow: Record<string, unknown> | null,
+  speed: { row?: Record<string, unknown> | null; error?: { code: string; message: string } } = {},
+) {
+  const selects: string[] = []
+  const db = {
+    from: () => ({
+      select: (columns: string) => {
+        selects.push(columns)
+        const isSpeed = columns === 'voice_reply_speed'
+        const chain = {
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve(
+              isSpeed
+                ? { data: speed.error ? null : (speed.row ?? null), error: speed.error ?? null }
+                : { data: voiceRow, error: null },
+            ),
+        }
+        return chain
+      },
+    }),
+  } as unknown as SupabaseClient
+  return { db, selects }
 }
 
 describe('loadVoiceConfig', () => {
@@ -96,6 +128,8 @@ describe('loadVoiceConfig', () => {
       geminiApiKey: 'plain:enc-gemini',
       elevenLabsApiKey: 'plain:enc-eleven',
       elevenLabsVoiceId: 'voice-1',
+      // `dbReturning` hands the same row to the speed read: no speed in it.
+      replySpeed: 0.9,
     })
   })
 
@@ -167,5 +201,66 @@ describe('loadVoiceConfig', () => {
       'acct',
     )
     expect(v).toMatchObject({ transcriptionEnabled: false, replyEnabled: false })
+  })
+})
+
+describe('loadVoiceConfig — the speaking speed', () => {
+  it('is the account’s stored speed when voice replies are on', async () => {
+    const { db, selects } = voiceDb(VOICE_ROW, { row: { voice_reply_speed: 1.08 } })
+    const v = await loadVoiceConfig(db, 'acct')
+    expect(v).toMatchObject({ replyEnabled: true, replySpeed: 1.08 })
+    // Read on its own, after the settings that say replies are on.
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).toBe('voice_reply_speed')
+    expect(selects[0]).not.toContain('voice_reply_speed')
+  })
+
+  it('reads a numeric the database hands back as text', async () => {
+    const { db } = voiceDb(VOICE_ROW, { row: { voice_reply_speed: '1.08' } })
+    expect((await loadVoiceConfig(db, 'acct')).replySpeed).toBe(1.08)
+  })
+
+  it('keeps voice replies ON, at 0.9, on a database without migration 042', async () => {
+    const { db } = voiceDb(VOICE_ROW, {
+      error: { code: '42703', message: 'column ai_configs.voice_reply_speed does not exist' },
+    })
+    expect(await loadVoiceConfig(db, 'acct')).toEqual({
+      transcriptionEnabled: true,
+      replyEnabled: true,
+      geminiApiKey: 'plain:enc-gemini',
+      elevenLabsApiKey: 'plain:enc-eleven',
+      elevenLabsVoiceId: 'voice-1',
+      replySpeed: 0.9,
+    })
+  })
+
+  it.each([
+    [5, 1.2],
+    [0.1, 0.7],
+    [1.0849, 1.08],
+  ])('brings a stored %s inside the range, as %s', async (stored, spoken) => {
+    const { db } = voiceDb(VOICE_ROW, { row: { voice_reply_speed: stored } })
+    expect((await loadVoiceConfig(db, 'acct')).replySpeed).toBe(spoken)
+  })
+
+  it.each([
+    ['there is no row for the speed', null],
+    ['the speed is null', { voice_reply_speed: null }],
+    ['the speed is not a number', { voice_reply_speed: 'fast' }],
+  ])('is 0.9 when %s', async (_name, row) => {
+    const { db } = voiceDb(VOICE_ROW, { row })
+    expect(await loadVoiceConfig(db, 'acct')).toMatchObject({ replyEnabled: true, replySpeed: 0.9 })
+  })
+
+  it.each([
+    ['voice replies are switched off', { ...VOICE_ROW, voice_reply_enabled: false }],
+    ['listening is switched off', { ...VOICE_ROW, voice_transcription_enabled: false }],
+    ['there is no voice id', { ...VOICE_ROW, elevenlabs_voice_id: null }],
+    ['there are no voice settings at all', null],
+  ])('does not read the speed when %s: nothing will be spoken', async (_name, voiceRow) => {
+    const { db, selects } = voiceDb(voiceRow, { row: { voice_reply_speed: 1.2 } })
+    const v = await loadVoiceConfig(db, 'acct')
+    expect(v).toMatchObject({ replyEnabled: false, replySpeed: 0.9 })
+    expect(selects).not.toContain('voice_reply_speed')
   })
 })

@@ -39,6 +39,8 @@ export interface VoiceConfig {
   geminiApiKey: string | null
   elevenLabsApiKey: string | null
   elevenLabsVoiceId: string | null
+  /** How fast voice replies are spoken, 0.7 to 1.2 (see `./voice-speed`). */
+  replySpeed: number
 }
 
 /** A single conversation turn in the shape both providers accept. */
