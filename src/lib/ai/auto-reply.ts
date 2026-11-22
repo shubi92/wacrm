@@ -12,7 +12,7 @@ import {
 } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
-import { engineSendLinkButton, engineSendText } from '@/lib/flows/meta-send'
+import { engineSendInteractiveList, engineSendLinkButton, engineSendText } from '@/lib/flows/meta-send'
 import {
   BOT_FORMS,
   formLang,
@@ -20,6 +20,7 @@ import {
   type FormSubmission,
 } from '@/lib/whatsapp/forms'
 import { createFormLink } from '@/lib/whatsapp/forms/links'
+import { mentionsMenus, menuMessage, menuSentNote } from '@/lib/whatsapp/menus'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { isTestNumberAllowed } from './test-numbers'
 import {
@@ -101,7 +102,8 @@ interface DispatchArgs {
  * The model can ask for a form to go out with its reply (when the
  * account's instructions say so): its line is sent with a button that
  * opens the form's page. The answers come back through
- * `dispatchFormSubmissionToAiReply`, not here.
+ * `dispatchFormSubmissionToAiReply`, not here. It can ask the same way
+ * for a menu under its line; a tap on it arrives as an ordinary message.
  *
  * A voice note passes the same gates, then is turned into text (only
  * when the account switched that on — otherwise silence, as before). If
@@ -233,7 +235,7 @@ export async function dispatchInboundToAiReply(
       resumed: !!conv.ai_resumed_at,
     })
 
-    const { text, handoff, lead, ready, form, leadUnreadable, usage, tagged, raw, retried } = await generateReply({
+    const { text, handoff, lead, ready, form, menu, leadUnreadable, usage, tagged, raw, retried } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -374,14 +376,25 @@ export async function dispatchInboundToAiReply(
       return
     }
 
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text,
-      aiGenerated: true,
-    })
+    // The model asked for a menu under its line. Only for an account
+    // whose own instructions name a menu, and each menu once per chat:
+    // after that (or if the menu can't go out) the line is sent as
+    // plain text.
+    const withMenu =
+      !!menu &&
+      mentionsMenus(config.systemPrompt) &&
+      !messages.some((m) => m.role === 'assistant' && m.content.endsWith(menuSentNote(menu))) &&
+      (await sendMenu({ accountId, userId: configOwnerUserId, conversationId, contactId, menu, text }))
+    if (!withMenu) {
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text,
+        aiGenerated: true,
+      })
+    }
 
     // They spoke, so answer in voice too — after the text, which is the
     // part that must arrive. No-op unless voice replies are switched on;
@@ -458,6 +471,36 @@ export async function dispatchFormSubmissionToAiReply(
     }
   } catch (err) {
     console.error('[ai auto-reply] form submission failed:', err)
+  }
+}
+
+/**
+ * Send the bot's line with a menu under it. False when it could not go
+ * out: the caller then sends the line as plain text — a greeting
+ * without its menu is still a fine answer, so nobody is handed off.
+ */
+async function sendMenu(args: {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  menu: string
+  text: string
+}): Promise<boolean> {
+  const { menu, text, ...to } = args
+  try {
+    await engineSendInteractiveList({
+      ...to,
+      bodyText: text,
+      ...menuMessage(menu, formLang(text)),
+      aiGenerated: true,
+    })
+    return true
+  } catch (err) {
+    console.error(`[ai auto-reply] could not send the menu ${menu}:`, err)
+    // The menu reached the customer; only our own record of it failed.
+    // Sending the line again as text would say it twice.
+    return (err instanceof Error ? err.message : String(err)).startsWith('sent to Meta')
   }
 }
 

@@ -10,6 +10,7 @@ import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
 import { hasLeadTag, maskLeadBlocks, parseLeadBlock } from './lead'
 import { takeFormMarker } from '@/lib/whatsapp/forms'
+import { takeMenuMarker } from '@/lib/whatsapp/menus'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -129,10 +130,12 @@ export function parseGeneration(
   // reply and data can't be told apart — so nothing is sent.
   // `[[FORM:name]]`, in the reply or after it: send that form with this
   // reply. Like the other markers it never reaches the customer.
+  // `[[MENU:name]]` works the same way for a tap-to-choose menu.
   const { form } = takeFormMarker(signals)
-  const reply = takeFormMarker(body.split(LEAD_MARK).join('')).text
+  const { menu } = takeMenuMarker(signals)
+  const reply = takeMenuMarker(takeFormMarker(body.split(LEAD_MARK).join('')).text).text
   const text = hasLeadTag(reply) ? '' : reply.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, lead, ready, form, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
+  return { text, handoff, lead, ready, form, menu, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
 }
 
 /** Stands in for a lead block while the output is parsed; never valid

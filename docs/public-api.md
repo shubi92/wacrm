@@ -378,6 +378,10 @@ whenever the bot knew the service or had at least one answer, and `null`
 when it had collected nothing (or the details could not be read).
 `customer_ready` always comes with a `lead`.
 
+A tap on a menu the AI agent sent arrives as `message.received` like any
+other tap: `text` is the option's title and `interactive_reply_id` is
+`menu:<menu>:<option>` (for example `menu:services:furniture_moving`).
+
 A handoff also happens when a customer sends in a form the agent sent
 them (see [whatsapp-forms](whatsapp-forms/README.md)): `reason` is
 `customer_ready`, `quoted_price_sar` is `null`, and `details` holds the

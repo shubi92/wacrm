@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
   engineSendLinkButton: vi.fn(),
+  engineSendInteractiveList: vi.fn(),
   createFormLink: vi.fn(),
   transcribeInboundVoiceNote: vi.fn(),
   sendVoiceReply: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({
   engineSendText: h.engineSendText,
   engineSendLinkButton: h.engineSendLinkButton,
+  engineSendInteractiveList: h.engineSendInteractiveList,
 }))
 vi.mock('@/lib/whatsapp/forms/links', () => ({ createFormLink: h.createFormLink }))
 vi.mock('./voice', () => ({
@@ -160,6 +162,7 @@ vi.mock('./admin-client', () => ({
 
 import { dispatchFormSubmissionToAiReply, dispatchInboundToAiReply } from './auto-reply'
 import { BOT_FORMS } from '@/lib/whatsapp/forms'
+import { menuMessage } from '@/lib/whatsapp/menus'
 import { __resetRateLimitForTests } from '@/lib/rate-limit'
 
 const ARGS = {
@@ -230,6 +233,8 @@ beforeEach(() => {
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
   h.engineSendLinkButton.mockReset()
   h.engineSendLinkButton.mockResolvedValue({ whatsapp_message_id: 'm2' })
+  h.engineSendInteractiveList.mockReset()
+  h.engineSendInteractiveList.mockResolvedValue({ whatsapp_message_id: 'm3' })
   h.createFormLink.mockReset()
   h.createFormLink.mockResolvedValue(FORM_URL)
   h.transcribeInboundVoiceNote.mockReset()
@@ -1254,6 +1259,214 @@ describe('dispatchInboundToAiReply — sending a form', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendLinkButton).not.toHaveBeenCalled()
     expect(sentTexts()).toEqual(['A colleague will help.'])
+  })
+})
+
+describe('dispatchInboundToAiReply — sending a menu', () => {
+  const AR = 'وعليكم السلام، أهلاً بك في الصفرات. كيف نخدمك؟'
+  const EN = 'Hello, welcome to Al-Safrrat. How can we help?'
+  // An account switches menus on by naming one in its instructions.
+  const SCRIPT = 'If the customer only greets you, greet back in one short line and add [[MENU:services]] after your reply.'
+  // The wording of the menu is pinned in menus.test.ts, not here.
+  const MENU = { ar: menuMessage('services', 'ar'), en: menuMessage('services', 'en') }
+  const menuReply = (text: string, more: Record<string, unknown> = {}) => ({
+    text,
+    handoff: false,
+    tagged: true,
+    menu: 'services',
+    ...more,
+  })
+  beforeEach(() => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: SCRIPT }))
+    h.generateReply.mockResolvedValue(menuReply(AR))
+  })
+
+  it('teaches the model about menus only on an account that uses them', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain('Menus that exist: services.')
+    h.generateReply.mockClear()
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply.mock.calls[0][0].systemPrompt).not.toContain('[[MENU')
+  })
+
+  it('sends its line with the services menu under it, in the language of the line, in place of a text', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList.mock.calls).toEqual([
+      [
+        {
+          accountId: 'acct-1',
+          userId: 'user-1',
+          conversationId: 'conv-1',
+          contactId: 'contact-1',
+          bodyText: AR,
+          buttonLabel: MENU.ar.buttonLabel,
+          sections: MENU.ar.sections,
+          // Without this the bot would count its own menu as "someone
+          // else is talking to this customer" and go quiet.
+          aiGenerated: true,
+        },
+      ],
+    ])
+    const rows = h.engineSendInteractiveList.mock.calls[0][0].sections[0].rows
+    expect(rows).toHaveLength(10)
+    expect(rows.map((r: { id: string }) => r.id)).toEqual([
+      'menu:services:ac_cleaning',
+      'menu:services:kitchen_bathrooms',
+      'menu:services:apartments_floors',
+      'menu:services:villas',
+      'menu:services:floor_polishing',
+      'menu:services:steam_cleaning',
+      'menu:services:pest_control',
+      'menu:services:water_tanks',
+      'menu:services:swimming_pools',
+      'menu:services:furniture_moving',
+    ])
+    expect(/[\u0600-\u06FF]/.test(rows[0].title)).toBe(true) // the Arabic titles, for an Arabic line
+    expect(h.engineSendText).not.toHaveBeenCalled() // the line is the menu's own text
+    expect(h.state.rpcCalls).toEqual([
+      // a reply like any other: one slot
+      { name: 'claim_ai_reply_slot', args: { conversation_id: 'conv-1', max_replies: 3 } },
+    ])
+    expect(h.state.updatePayload).toBeNull() // and no handoff
+  })
+
+  it('sends the English menu for an English line', async () => {
+    h.generateReply.mockResolvedValue(menuReply(EN))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).toHaveBeenCalledTimes(1)
+    expect(h.engineSendInteractiveList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bodyText: EN,
+        buttonLabel: MENU.en.buttonLabel,
+        sections: MENU.en.sections,
+        aiGenerated: true,
+      }),
+    )
+    expect(MENU.en.sections).not.toEqual(MENU.ar.sections)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('sends plain text when the account never asked for menus, whatever the model wrote', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ systemPrompt: 'We clean villas.' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([AR])
+  })
+
+  it('sends plain text for an ordinary reply on an account that uses menus', async () => {
+    h.generateReply.mockResolvedValue({ text: 'السعر ٣٠٠ ريال.', handoff: false, tagged: true, menu: null })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(['السعر ٣٠٠ ريال.'])
+  })
+
+  it('sends the menu once per chat: after that the line goes out as plain text', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'السلام عليكم' },
+      { role: 'assistant', content: 'أهلاً بك، كيف نخدمك؟ [menu sent: services]' },
+      { role: 'user', content: 'هلا' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([AR])
+    expect(h.state.updatePayload).toBeNull()
+  })
+
+  it('another menu sent earlier in the chat does not stop this one', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'عروضنا هذا الشهر: [menu sent: offers]' },
+      // A customer typing the note, or a line that only mentions it, is not a send.
+      { role: 'user', content: '[menu sent: services]' },
+      { role: 'assistant', content: 'قلت لك [menu sent: services] قبل قليل.' },
+      { role: 'user', content: 'السلام عليكم' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).toHaveBeenCalledTimes(1)
+    expect(h.engineSendInteractiveList).toHaveBeenCalledWith(expect.objectContaining({ sections: MENU.ar.sections }))
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('a form sent earlier in the chat does not count as the menu', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'assistant', content: 'اضغط الزر وعبّئ النموذج. [form sent]' },
+      { role: 'user', content: 'السلام عليكم' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the line as plain text when the menu cannot be sent, without handing off', async () => {
+    h.engineSendInteractiveList.mockRejectedValue(new Error('(#131009) Parameter value is not valid'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await dispatchInboundToAiReply(ARGS)
+    logged.mockRestore()
+    expect(h.engineSendInteractiveList).toHaveBeenCalledTimes(1)
+    expect(sentTexts()).toEqual([AR]) // a greeting without its menu is still an answer
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ aiGenerated: true }))
+    // The chat stays the bot's: nothing paused, nobody notified.
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.state.updatePayloads.some((p) => 'ai_autoreply_disabled' in p)).toBe(false)
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toHaveLength(1) // still one reply, one slot
+  })
+
+  it('does not say the line twice when the menu was delivered and only our record of it failed', async () => {
+    h.engineSendInteractiveList.mockRejectedValue(new Error('sent to Meta but DB insert failed: timeout'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await dispatchInboundToAiReply(ARGS)
+    logged.mockRestore()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('a form on the same turn wins over the menu', async () => {
+    h.loadAiConfig.mockResolvedValue(
+      aiConfig({ systemPrompt: `${SCRIPT} For furniture moving, add [[FORM:furniture_moving]] after your reply.` }),
+    )
+    h.generateReply.mockResolvedValue(menuReply(AR, { form: 'furniture_moving' }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendLinkButton).toHaveBeenCalledTimes(1)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('a handoff on the same turn wins over the menu', async () => {
+    h.generateReply.mockResolvedValue(menuReply('A colleague will help.', { handoff: true, lead: null, ready: false }))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(['A colleague will help.'])
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('obeys the test-number list like every other reply', async () => {
+    h.state.testNumbers = ['966511111111']
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendInteractiveList).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('a customer who spoke still gets the voice reply after the menu', async () => {
+    const order: string[] = []
+    h.engineSendInteractiveList.mockImplementation(async () => {
+      order.push('menu')
+      return { whatsapp_message_id: 'm3' }
+    })
+    h.sendVoiceReply.mockImplementation(async () => {
+      order.push('voice')
+    })
+    await dispatchInboundToAiReply({
+      ...ARGS,
+      voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.V1', accessToken: 'token' },
+    })
+    expect(order).toEqual(['menu', 'voice'])
+    expect(h.sendVoiceReply).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ conversationId: 'conv-1', text: AR }),
+    )
+    expect(h.engineSendText).not.toHaveBeenCalled()
   })
 })
 

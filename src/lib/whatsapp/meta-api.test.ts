@@ -6,6 +6,7 @@ import {
   sendInteractiveList,
   sendTemplateMessage,
 } from "./meta-api";
+import { menuMessage } from "./menus";
 
 // All assertions in this file run BEFORE the network call. We stub fetch
 // to a never-resolving mock so a test that accidentally falls through to
@@ -398,6 +399,82 @@ describe("sendInteractiveList — validation", () => {
         },
       },
     });
+  });
+});
+
+describe("sendInteractiveList — the AI agent's services menu", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("posts the line with one button that opens the ten services", async () => {
+    let url = "";
+    let init: RequestInit = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: string, i: RequestInit) => {
+        url = u;
+        init = i;
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.MENU" }] }),
+          { status: 200 },
+        );
+      }),
+    );
+    const line = "أهلاً بك في الصفرات، كيف نخدمك؟";
+    // The wording is pinned in menus.test.ts; here it is the shape that counts.
+    const menu = menuMessage("services", "ar");
+    const title = (row: string) =>
+      menu.sections[0].rows.find((r) => r.id === `menu:services:${row}`)!.title;
+
+    const result = await sendInteractiveList({ ...BASE_ARGS, bodyText: line, ...menu });
+
+    expect(result).toEqual({ messageId: "wamid.MENU" });
+    expect(url).toMatch(/\/test-phone\/messages$/);
+    expect(init.method).toBe("POST");
+    // Exactly this: no header, no footer, no row descriptions.
+    expect(JSON.parse(String(init.body))).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text: line },
+        action: {
+          button: menu.buttonLabel,
+          sections: [
+            {
+              title: menu.sections[0].title,
+              rows: [
+                "ac_cleaning",
+                "kitchen_bathrooms",
+                "apartments_floors",
+                "villas",
+                "floor_polishing",
+                "steam_cleaning",
+                "pest_control",
+                "water_tanks",
+                "swimming_pools",
+                "furniture_moving",
+              ].map((row) => ({ id: `menu:services:${row}`, title: title(row) })),
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("passes the sender's own checks in English too", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ messages: [{ id: "wamid.EN" }] }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      sendInteractiveList({ ...BASE_ARGS, ...menuMessage("services", "en") }),
+    ).resolves.toEqual({ messageId: "wamid.EN" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

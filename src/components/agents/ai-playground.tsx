@@ -21,6 +21,8 @@ interface Turn {
   raw?: string | null;
   /** assistant-only: the form the bot would send with this reply. */
   form?: string | null;
+  /** assistant-only: the menu the bot would put under this reply. */
+  menu?: string | null;
 }
 
 export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
@@ -76,6 +78,7 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
           choseHandoff: Boolean(data.chose_handoff),
           raw: typeof data.raw === 'string' ? data.raw : null,
           form: typeof data.form === 'string' ? data.form : null,
+          menu: typeof data.menu === 'string' ? data.menu : null,
         },
       ]);
     } catch {
@@ -182,6 +185,11 @@ export function AiPlayground({ onGoToSetup }: { onGoToSetup?: () => void }) {
               {t.role === 'assistant' && t.form && (
                 <p className="mt-1.5 border-t border-border/50 pt-1.5 text-xs text-muted-foreground">
                   {`Sent with an "Open form" button: the ${t.form.replace(/_/g, ' ')} form.`}
+                </p>
+              )}
+              {t.role === 'assistant' && t.menu && (
+                <p className="mt-1.5 border-t border-border/50 pt-1.5 text-xs text-muted-foreground">
+                  {`Sent with a tap-to-choose menu under it: ${t.menu}.`}
                 </p>
               )}
               {t.role === 'assistant' && t.lead && (
