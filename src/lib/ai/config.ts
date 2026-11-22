@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { AiConfig, VoiceConfig } from './types'
+import { VOICE_SPEED_DEFAULT, storedVoiceSpeed } from './voice-speed'
 
 interface AiConfigRow {
   provider: 'openai' | 'anthropic'
@@ -119,6 +120,21 @@ const VOICE_OFF: VoiceConfig = {
   geminiApiKey: null,
   elevenLabsApiKey: null,
   elevenLabsVoiceId: null,
+  replySpeed: VOICE_SPEED_DEFAULT,
+}
+
+/**
+ * The account's speaking pace. Read on its own, so voice replies keep
+ * working (at the default pace) on a database that hasn't run migration
+ * 042. Never throws.
+ */
+async function loadVoiceSpeed(db: SupabaseClient, accountId: string): Promise<number> {
+  const { data, error } = await db
+    .from('ai_configs')
+    .select('voice_reply_speed')
+    .eq('account_id', accountId)
+    .maybeSingle()
+  return error ? VOICE_SPEED_DEFAULT : storedVoiceSpeed(data?.voice_reply_speed)
 }
 
 /**
@@ -176,6 +192,8 @@ export async function loadVoiceConfig(
       geminiApiKey,
       elevenLabsApiKey,
       elevenLabsVoiceId,
+      // Only read when something will be spoken.
+      replySpeed: replyEnabled ? await loadVoiceSpeed(db, accountId) : VOICE_SPEED_DEFAULT,
     }
   } catch (err) {
     console.error(

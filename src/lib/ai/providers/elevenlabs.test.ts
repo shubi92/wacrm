@@ -11,6 +11,7 @@ const ARGS = {
   apiKey: 'fake-xi-key',
   voiceId: 'voice/with space',
   text: 'مرحبا، كيف أقدر أساعدك؟',
+  speed: 0.9,
   outputFormat: ELEVENLABS_OPUS_FORMAT,
   timeoutMs: 5_000,
 }
@@ -50,10 +51,24 @@ describe('synthesizeSpeech', () => {
     expect(JSON.parse(init.body as string)).toEqual({
       text: ARGS.text,
       model_id: ELEVENLABS_TTS_MODEL,
-      // Slower than the voice's own pace (1.0), and nothing else overridden.
+      // The pace it was given, and nothing else about the voice overridden.
       voice_settings: { speed: 0.9 },
     })
     expect(url).not.toContain('fake-xi-key')
+  })
+
+  it.each([0.9, 1.08, 0.7, 1.2])('speaks at the pace it is given (%s)', async (speed) => {
+    fetchMock().mockResolvedValue(audioResponse([1]))
+
+    await synthesizeSpeech({ ...ARGS, speed })
+
+    const [, init] = fetchMock().mock.calls[0] as [string, RequestInit]
+    // The whole body: the account's speed is the only voice setting sent.
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: ARGS.text,
+      model_id: 'eleven_multilingual_v2',
+      voice_settings: { speed },
+    })
   })
 
   it('throws AiError on an empty body', async () => {

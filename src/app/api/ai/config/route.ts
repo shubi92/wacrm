@@ -13,6 +13,12 @@ import { parseTestNumbers } from '@/lib/ai/test-numbers'
 import { clampMaxAutoReplies } from '@/lib/ai/defaults'
 import { validateGeminiKey } from '@/lib/ai/providers/gemini'
 import { validateElevenLabsVoice } from '@/lib/ai/providers/elevenlabs'
+import {
+  VOICE_SPEED_MAX,
+  VOICE_SPEED_MIN,
+  storedVoiceSpeed,
+  toVoiceSpeed,
+} from '@/lib/ai/voice-speed'
 
 const MIGRATION_038_MISSING =
   'Test numbers need database migration 038 (ai_configs.auto_reply_test_numbers). Nothing was saved.'
@@ -20,6 +26,12 @@ const MIGRATION_039_MISSING =
   'Voice notes need database migration 039 (ai_configs voice columns). Nothing was saved.'
 const MIGRATION_040_MISSING =
   'More than 20 auto-replies per conversation needs database migration 040 (ai_configs reply limit up to 30). Nothing was saved.'
+const MIGRATION_042_MISSING =
+  'Voice speed needs database migration 042 (ai_configs voice_reply_speed). Nothing was saved.'
+/** The speed column is not there yet: Postgres says 42703 on a read,
+ *  the REST layer PGRST204 on a write. */
+const isSpeedColumnMissing = (err: { code?: string; message?: string }) =>
+  (err.code === '42703' || err.code === 'PGRST204') && /voice_reply_speed/.test(err.message ?? '')
 /** Postgres check_violation. Before migration 040 the database still
  *  refuses a reply limit above the old ceiling of 20. */
 const isOldReplyLimit = (err: { code?: string }, maxPer: number) =>
@@ -96,12 +108,24 @@ export async function GET() {
       has_gemini_key: !!vc?.gemini_api_key,
       has_elevenlabs_key: !!vc?.elevenlabs_api_key,
     }
+    // And the speaking pace (migration 042), read alone for the same
+    // reason: `voice_speed_available: false` hides the control.
+    const { data: vs, error: vsErr } = await supabase
+      .from('ai_configs')
+      .select('voice_reply_speed')
+      .eq('account_id', accountId)
+      .maybeSingle()
+    const speed = {
+      voice_speed_available: !vsErr,
+      voice_reply_speed: storedVoiceSpeed(vs?.voice_reply_speed),
+    }
 
     if (!data) {
       return NextResponse.json({
         configured: false,
         auto_reply_test_numbers: testNumbers,
         ...voice,
+        ...speed,
       })
     }
     // The keys are selected only to derive the has_* flags; neither is
@@ -114,6 +138,7 @@ export async function GET() {
       ...safe,
       auto_reply_test_numbers: testNumbers,
       ...voice,
+      ...speed,
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -198,6 +223,19 @@ export async function POST(request: Request) {
         ? body.embeddings_api_key.trim()
         : ''
     const clearEmbeddingsKey = body.embeddings_api_key === null
+
+    // The speaking pace of voice replies (migration 042). Left as it is
+    // when the field is absent, so a save that doesn't know about it (an
+    // older form, or a script edit through this endpoint) never resets it.
+    // A number outside the range is brought inside it; anything that is
+    // not a number is refused.
+    const speedProvided = 'voice_reply_speed' in body
+    const voiceSpeed = speedProvided ? toVoiceSpeed(body.voice_reply_speed) : null
+    if (speedProvided && voiceSpeed === null) {
+      return bad(
+        `Voice speed must be a number from ${VOICE_SPEED_MIN} to ${VOICE_SPEED_MAX}. Nothing was saved.`,
+      )
+    }
 
     // Voice notes (migration 039). Untouched unless the form sent a voice
     // field, so an older form build — or a database without 039 — still
@@ -430,6 +468,7 @@ export async function POST(request: Request) {
     }
     // Empty unless the form sent voice fields (see above).
     Object.assign(shared, voiceWrite)
+    if (speedProvided) shared.voice_reply_speed = voiceSpeed
 
     if (existing) {
       const { error: upErr } = await supabase
@@ -438,6 +477,7 @@ export async function POST(request: Request) {
         .eq('account_id', accountId)
       if (upErr) {
         console.error('[ai/config POST] update error:', upErr)
+        if (speedProvided && isSpeedColumnMissing(upErr)) return bad(MIGRATION_042_MISSING)
         if (testNumbersProvided && upErr.code === '42703') return bad(MIGRATION_038_MISSING)
         if (voiceProvided && upErr.code === '42703') return bad(MIGRATION_039_MISSING)
         if (isOldReplyLimit(upErr, maxPer)) return bad(MIGRATION_040_MISSING)
@@ -455,6 +495,7 @@ export async function POST(request: Request) {
       })
       if (insErr) {
         console.error('[ai/config POST] insert error:', insErr)
+        if (speedProvided && isSpeedColumnMissing(insErr)) return bad(MIGRATION_042_MISSING)
         if (testNumbersProvided && insErr.code === '42703') return bad(MIGRATION_038_MISSING)
         if (voiceProvided && insErr.code === '42703') return bad(MIGRATION_039_MISSING)
         if (isOldReplyLimit(insErr, maxPer)) return bad(MIGRATION_040_MISSING)

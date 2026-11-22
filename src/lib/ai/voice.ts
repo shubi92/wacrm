@@ -164,6 +164,7 @@ export async function sendVoiceReply(
         apiKey: voice.elevenLabsApiKey!,
         voiceId: voice.elevenLabsVoiceId!,
         text: spoken,
+        speed: voice.replySpeed,
         outputFormat,
         timeoutMs: SPEAK_TIMEOUT_MS,
       })

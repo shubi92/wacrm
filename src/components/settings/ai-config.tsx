@@ -31,6 +31,12 @@ import type { AiProvider } from '@/lib/ai/types';
 import type { AccountMember } from '@/types';
 import { fetchAccountMembers, memberLabel } from '@/lib/account/members';
 import { useTranslations } from 'next-intl';
+import {
+  VOICE_SPEED_DEFAULT,
+  VOICE_SPEED_MAX,
+  VOICE_SPEED_MIN,
+  storedVoiceSpeed,
+} from '@/lib/ai/voice-speed';
 
 const MASKED_KEY = '••••••••••••••••';
 
@@ -91,6 +97,9 @@ export function AiConfig() {
   const [elevenLabsKeyEdited, setElevenLabsKeyEdited] = useState(false);
   const [hasStoredElevenLabsKey, setHasStoredElevenLabsKey] = useState(false);
   const [voiceId, setVoiceId] = useState('');
+  // Hidden (and not sent) until the load says the database can store it.
+  const [voiceSpeedAvailable, setVoiceSpeedAvailable] = useState(false);
+  const [voiceSpeed, setVoiceSpeed] = useState(VOICE_SPEED_DEFAULT);
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -106,6 +115,7 @@ export function AiConfig() {
     setTestNumbers('');
     // Same for voice notes: hidden (and not sent) until this load says so.
     setVoiceAvailable(false);
+    setVoiceSpeedAvailable(false);
     try {
       const res = await fetch('/api/ai/config');
       const data = await res.json();
@@ -126,6 +136,8 @@ export function AiConfig() {
       setVoiceTranscription(data.voice_transcription_enabled === true);
       setVoiceReply(data.voice_reply_enabled === true);
       setVoiceId(data.elevenlabs_voice_id ?? '');
+      setVoiceSpeedAvailable(data.voice_speed_available === true);
+      setVoiceSpeed(storedVoiceSpeed(data.voice_reply_speed));
       setHasStoredGeminiKey(Boolean(data.has_gemini_key));
       setGeminiKey(data.has_gemini_key ? MASKED_KEY : '');
       setGeminiKeyEdited(false);
@@ -205,6 +217,7 @@ export function AiConfig() {
             ? elevenLabsKey.trim() || null
             : undefined,
           elevenlabs_voice_id: voiceId.trim() || null,
+          ...(voiceSpeedAvailable ? { voice_reply_speed: voiceSpeed } : {}),
         }
       : {}),
   });
@@ -285,6 +298,7 @@ export function AiConfig() {
         setElevenLabsKey('');
         setElevenLabsKeyEdited(false);
         setVoiceId('');
+        setVoiceSpeed(VOICE_SPEED_DEFAULT);
       } else {
         const data = await res.json();
         toast.error(data.error ?? t('removeFailed'));
@@ -692,6 +706,47 @@ export function AiConfig() {
                   </p>
                 </div>
               </div>
+
+              {voiceSpeedAvailable && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-4">
+                    <Label htmlFor="ai-voice-speed">{t('voiceSpeed')}</Label>
+                    <span className="text-sm font-medium tabular-nums text-foreground" dir="ltr">
+                      {voiceSpeed.toFixed(2)}
+                    </span>
+                  </div>
+                  <input
+                    id="ai-voice-speed"
+                    type="range"
+                    dir="ltr"
+                    min={VOICE_SPEED_MIN}
+                    max={VOICE_SPEED_MAX}
+                    step={0.01}
+                    value={voiceSpeed}
+                    onChange={(e) => setVoiceSpeed(storedVoiceSpeed(e.target.value))}
+                    disabled={disabled}
+                    className="w-full accent-primary"
+                  />
+                  {/* 1.0 sits where it is on the track, not in the middle. */}
+                  <div className="relative h-4 text-xs text-muted-foreground" dir="ltr">
+                    <span className="absolute left-0">
+                      {t('voiceSpeedSlower')} {VOICE_SPEED_MIN}
+                    </span>
+                    <span
+                      className="absolute -translate-x-1/2"
+                      style={{
+                        left: `${((1 - VOICE_SPEED_MIN) / (VOICE_SPEED_MAX - VOICE_SPEED_MIN)) * 100}%`,
+                      }}
+                    >
+                      {t('voiceSpeedNormal')} 1.0
+                    </span>
+                    <span className="absolute right-0">
+                      {t('voiceSpeedFaster')} {VOICE_SPEED_MAX}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('voiceSpeedHint')}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
