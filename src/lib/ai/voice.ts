@@ -111,16 +111,17 @@ export async function transcribeInboundVoiceNote(
 
     return { status: 'ok', text: text.trim() }
   } catch (err) {
-    console.error(
-      `[ai voice] transcription failed on conversation ${conversationId}:`,
-      err instanceof Error ? err.message : err,
-    )
+    // The provider's own words (never a key — those travel in headers)
+    // go into the internal handoff note: the host's server log is the
+    // only other place this error exists, and the owner can't read it.
+    const detail = (err instanceof Error ? err.message : String(err)).slice(0, 200)
+    console.error(`[ai voice] transcription failed on conversation ${conversationId}:`, detail)
     const timedOut = err instanceof AiError && err.code === 'timeout'
     return {
       status: 'failed',
       reason: timedOut
         ? 'turning the voice note into text took too long.'
-        : 'the voice note could not be turned into text.',
+        : `the voice note could not be turned into text (${detail}).`,
     }
   }
 }
