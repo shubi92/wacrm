@@ -13,12 +13,43 @@ const MAX_QUOTE_LEN = 160
  * own wording.
  */
 export function handoffFallbackMessage(lastCustomerText: string): string {
-  return /[\u0600-\u06FF]/.test(lastCustomerText)
+  return isArabic(lastCustomerText)
     ? 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
     : 'Your request has been passed to our team and they will contact you shortly.'
 }
 
-const REPLY_CAP_NOTE = '🤖 AI agent handed off: it reached its limit of '
+const WAITING_AR = 'وصلت رسالتك 🌿 محادثتك الآن عند فريق المبيعات، وبيرد عليك أحد الزملاء في أقرب وقت.'
+const WAITING_EN =
+  'We got your message. Your chat is now with our sales team, and one of them will reply as soon as possible.'
+
+/**
+ * What a customer who writes again after a handoff, before anyone has
+ * answered, is told: the chat is with the sales team. Fixed text, never
+ * a fresh answer. Same language rule as `handoffFallbackMessage`.
+ */
+export function waitingMessage(lastCustomerText: string): string {
+  return isArabic(lastCustomerText) ? WAITING_AR : WAITING_EN
+}
+
+/** True for a message the bot sent with `waitingMessage`. */
+export function isWaitingMessage(text: string | null | undefined): boolean {
+  return text === WAITING_AR || text === WAITING_EN
+}
+
+function isArabic(text: string): boolean {
+  return /[\u0600-\u06FF]/.test(text)
+}
+
+/** Every note the bot leaves when it hands a chat off starts with this.
+ *  A person's pause writes no note, and Resume AI clears it. */
+const BOT_HANDOFF_NOTE = '🤖 AI agent handed off'
+
+/** True when the chat's pause is one the bot made by handing off. */
+export function isBotHandoffSummary(summary: string | null | undefined): boolean {
+  return !!summary?.startsWith(BOT_HANDOFF_NOTE)
+}
+
+const REPLY_CAP_NOTE = `${BOT_HANDOFF_NOTE}: it reached its limit of `
 
 /** The internal note for a handoff that only the reply cap caused. */
 export function replyCapSummary(maxReplies: number): string {
