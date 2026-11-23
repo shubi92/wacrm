@@ -36,7 +36,8 @@ export function isWaitingMessage(text: string | null | undefined): boolean {
   return text === WAITING_AR || text === WAITING_EN
 }
 
-function isArabic(text: string): boolean {
+/** True when the text has any Arabic script in it. */
+export function isArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text)
 }
 
