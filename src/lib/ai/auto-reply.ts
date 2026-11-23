@@ -7,8 +7,11 @@ import { buildSystemPrompt } from './defaults'
 import {
   buildHandoffSummary,
   handoffFallbackMessage,
+  isBotHandoffSummary,
   isReplyCapSummary,
+  isWaitingMessage,
   replyCapSummary,
+  waitingMessage,
 } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -49,6 +52,12 @@ const HUMAN_ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000
  *  it (see `startOverIfQuiet`). */
 const QUIET_RESET_MS = 24 * 60 * 60 * 1000
 
+/** After a handoff, a customer who writes again hears that the chat is
+ *  with the team at most once per this gap… */
+const WAITING_GAP_MS = 30 * 60 * 1000
+/** …and at most this many times per handoff (see `sendWaitingReply`). */
+const WAITING_MAX = 3
+
 const CONV_COLUMNS =
   'assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at, ai_handoff_summary'
 
@@ -82,6 +91,9 @@ interface DispatchArgs {
  *   - the account set test numbers and this contact isn't one of them
  *   - a human agent is assigned (they own the thread)
  *   - auto-reply was disabled for this conversation (prior handoff)
+ *     — except that a chat the bot handed off, still waiting for the
+ *     team, gets one fixed "your chat is with the sales team" line
+ *     (see `sendWaitingReply`)
  *   - a non-AI outbound message went to this thread in the last 24h
  *     (checked before generation and again right before sending)
  *   - there's nothing to reply to
@@ -146,14 +158,19 @@ export async function dispatchInboundToAiReply(
       db.from('conversations').select(CONV_COLUMNS).eq('id', conversationId).maybeSingle()
     let { data: conv, error: convErr } = await readConv()
     if (convErr || !conv) return
-    if (conv.assigned_agent_id) return // a human owns this thread
+    // Not the bot's to answer — but a customer the bot handed to the team
+    // and nobody has answered yet is told so (see `sendWaitingReply`).
+    const notOurs = (c: NonNullable<typeof conv>) =>
+      sendWaitingReply(db, { ...args, conv: c })
+    if (conv.assigned_agent_id) return await notOurs(conv) // a human owns this thread
     if (await startOverIfQuiet(db, conversationId, conv)) {
       // Re-read rather than assume: another inbound, or a person, may
       // have changed the thread in the same instant.
       ;({ data: conv, error: convErr } = await readConv())
-      if (convErr || !conv || conv.assigned_agent_id) return
+      if (convErr || !conv) return
+      if (conv.assigned_agent_id) return await notOurs(conv)
     }
-    if (conv.ai_autoreply_disabled) return // handed off / turned off here
+    if (conv.ai_autoreply_disabled) return await notOurs(conv) // handed off / turned off here
 
     // Someone other than the bot is already talking to this customer (see
     // `othersActiveOnThread`). Checked again after generation, below.
@@ -459,6 +476,86 @@ export async function dispatchFormSubmissionToAiReply(
   } catch (err) {
     console.error('[ai auto-reply] form submission failed:', err)
   }
+}
+
+/**
+ * The bot handed this chat to the team and the customer wrote again
+ * before anyone answered: send one fixed line saying the chat is with
+ * the sales team, so they are not left in silence. Never a model call
+ * (no fresh answer, no price), no reply slot, no webhook event. Sent
+ * like the bot's goodbye, so the inbox and the outbound webhook show it
+ * as a bot message. A voice note gets this text, not a spoken reply.
+ *
+ * Only when the pause is the bot's own handoff — its note is on the chat
+ * (a person's pause writes none; Resume AI clears it). Who the chat is
+ * assigned to does not matter: only a rep's reply stops this.
+ *
+ * Everything else is read from the chat's own outbound messages, newest
+ * first, back to the handoff — the bot's last message that is not this
+ * line (its goodbye, or its last answer):
+ *   - a rep replied from the app since (`sender_id` set) → never again;
+ *     a Flow, automation or API send does not count
+ *   - already sent `WAITING_MAX` times → done
+ *   - sent less than `WAITING_GAP_MS` ago → not yet
+ * A later handoff has a new goodbye, so its count starts fresh. No
+ * bot message to count from → nothing sent.
+ */
+async function sendWaitingReply(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: DispatchArgs & {
+    conv: {
+      ai_autoreply_disabled: boolean
+      ai_handoff_summary?: string | null
+    }
+  },
+): Promise<void> {
+  const { conv, accountId, conversationId, contactId } = args
+  if (!conv.ai_autoreply_disabled || !isBotHandoffSummary(conv.ai_handoff_summary)) return
+
+  const { data, error } = await db
+    .from('messages')
+    .select('sender_type, sender_id, ai_generated, content_text, created_at')
+    .eq('conversation_id', conversationId)
+    .in('sender_type', ['agent', 'bot'])
+    .order('created_at', { ascending: false })
+    // ponytail: enough to reach the goodbye past a few Flow/API sends;
+    // more automated sends than this in one handoff → silence.
+    .limit(20)
+  if (error || !data) return
+  let sent = 0
+  let lastSentAt: string | undefined
+  let handoffAt: string | undefined
+  for (const m of data) {
+    if (m.sender_id) return // a rep replied from the app: they have it
+    if (m.ai_generated !== true) continue // a Flow, automation or API send
+    if (!isWaitingMessage(m.content_text)) {
+      handoffAt = m.created_at
+      break
+    }
+    sent += 1
+    lastSentAt ??= m.created_at
+  }
+  if (!handoffAt || sent >= WAITING_MAX) return
+  if (lastSentAt && Date.now() - Date.parse(lastSentAt) < WAITING_GAP_MS) return
+
+  const messages = await buildConversationContext(db, conversationId)
+  // Two messages landing together both pass the reads above; only the
+  // first claims this handoff's slot (synchronous, so no race in-process).
+  // ponytail: in-memory like the rest of `checkRateLimit` — one server
+  // process. Several would need a claim column on `conversations`.
+  const claim = checkRateLimit(`ai-waiting:${conversationId}:${handoffAt}`, {
+    limit: 1,
+    windowMs: WAITING_GAP_MS,
+  })
+  if (!claim.success) return
+  await engineSendText({
+    accountId,
+    userId: args.configOwnerUserId,
+    conversationId,
+    contactId,
+    text: waitingMessage(latestUserMessage(messages)),
+    aiGenerated: true,
+  })
 }
 
 /**

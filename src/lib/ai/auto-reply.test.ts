@@ -97,20 +97,27 @@ vi.mock('./admin-client', () => ({
             if (op === 'in') return (val as unknown[]).includes(row[col])
             return String(row[col]) >= String(val) // gte on ISO timestamps
           })
+        let newestFirst = false
         const chain = {
           select: () => chain,
           eq: record('eq'),
           in: record('in'),
           gte: record('gte'),
-          limit: (n: number) =>
-            Promise.resolve(
+          order: (col: string, opts?: { ascending?: boolean }) => {
+            newestFirst = col === 'created_at' && opts?.ascending === false
+            return chain
+          },
+          limit: (n: number) => {
+            const rows = h.state.messageRows.filter(matches)
+            if (newestFirst) {
+              rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+            }
+            return Promise.resolve(
               h.state.recentOutboundError
                 ? { data: null, error: h.state.recentOutboundError }
-                : {
-                    data: h.state.messageRows.filter(matches).slice(0, n),
-                    error: null,
-                  },
-            ),
+                : { data: rows.slice(0, n), error: null },
+            )
+          },
         }
         return chain
       }
@@ -172,6 +179,10 @@ const ARGS = {
 /** The standard line a customer gets when the bot hands off wordlessly. */
 const EN_LINE = 'Your request has been passed to our team and they will contact you shortly.'
 const AR_LINE = 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
+/** What a customer who writes again after a handoff is told. */
+const EN_WAIT =
+  'We got your message. Your chat is now with our sales team, and one of them will reply as soon as possible.'
+const AR_WAIT = 'وصلت رسالتك 🌿 محادثتك الآن عند فريق المبيعات، وبيرد عليك أحد الزملاء في أقرب وقت.'
 /** What `createFormLink` hands back: the address behind the form's button. */
 const FORM_URL = 'https://app.example/form/' + 'a'.repeat(43)
 const sentTexts = () => h.engineSendText.mock.calls.map((c) => c[0].text)
@@ -1049,14 +1060,16 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
     h.state.conv = CAPPED
     h.state.messageRows = [sentHoursAgo(2)]
     await dispatchInboundToAiReply(ARGS)
-    untouched()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_WAIT]) // only told the team has the chat
   })
 
   it('a capped chat: a teammate replied inside the 24 hours, so the bot stays paused', async () => {
     h.state.conv = CAPPED
     h.state.messageRows = [
       sentHoursAgo(30),
-      sentHoursAgo(3, { sender_type: 'agent', ai_generated: false }),
+      sentHoursAgo(3, { sender_type: 'agent', ai_generated: false, sender_id: 'user-3' }),
     ]
     await dispatchInboundToAiReply(ARGS)
     untouched()
@@ -1074,21 +1087,25 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
   })
 
   it.each([
-    ['the bot could not help', '🤖 AI agent handed off after 2 replies. The bot chose to hand off.'],
-    ['the customer is ready', '🤖 AI agent handed off after 2 replies. Customer is ready: ac cleaning, quoted 300 SAR.'],
-    ['a person paused it (no note)', null],
-  ])('a pause the cap did not cause is never lifted: %s', async (_label, note) => {
+    ['the bot could not help', '🤖 AI agent handed off after 2 replies. The bot chose to hand off.', [EN_WAIT]],
+    ['the customer is ready', '🤖 AI agent handed off after 2 replies. Customer is ready: ac cleaning, quoted 300 SAR.', [EN_WAIT]],
+    ['a person paused it (no note)', null, []],
+  ])('a pause the cap did not cause is never lifted: %s', async (_label, note, sent) => {
     h.state.conv = { ...CAPPED, ai_handoff_summary: note }
     h.state.messageRows = [sentHoursAgo(72)]
     await dispatchInboundToAiReply(ARGS)
-    untouched()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual(sent) // a bot handoff only says who has the chat
   })
 
   it('a capped chat a person is assigned to stays with that person', async () => {
     h.state.conv = { ...CAPPED, assigned_agent_id: 'agent-7' }
     h.state.messageRows = [sentHoursAgo(72)]
     await dispatchInboundToAiReply(ARGS)
-    untouched()
+    expect(h.state.updatePayload).toBeNull() // not lifted, still theirs
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_WAIT]) // they have not replied yet
   })
 
   it('a chat at its cap but not paused: answered after a quiet day instead of handed off', async () => {
@@ -1122,7 +1139,7 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
     h.state.handoffWon = false // the guarded update matched no row
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled() // still paused on re-read
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_WAIT])
   })
 
   it('leaves a new chat alone (nothing to reset, no extra lookup)', async () => {
@@ -1331,5 +1348,241 @@ describe('dispatchFormSubmissionToAiReply — the answers come back', () => {
   it('never throws', async () => {
     h.loadAiConfig.mockRejectedValue(new Error('db down'))
     await expect(dispatchFormSubmissionToAiReply(FORM_ARGS)).resolves.toBeUndefined()
+  })
+})
+
+describe('dispatchInboundToAiReply — after a handoff, the customer is told the team has the chat', () => {
+  const NOTE = '🤖 AI agent handed off after 2 replies. The bot chose to hand off.'
+  /** The bot handed off; nobody is assigned. */
+  const HANDED_OFF = {
+    assigned_agent_id: null,
+    ai_autoreply_disabled: true,
+    ai_reply_count: 2,
+    ai_handoff_summary: NOTE,
+    ai_resumed_at: null,
+  }
+  const goodbye = (hours: number) => sentHoursAgo(hours, { content_text: EN_LINE })
+  /** A person replied from the inbox: the send route records who. */
+  const repReplied = (hours: number) =>
+    sentHoursAgo(hours, { sender_type: 'agent', ai_generated: false, sender_id: 'user-3' })
+  const waited = (hours: number, text = EN_WAIT) => sentHoursAgo(hours, { content_text: text })
+  const VOICE = {
+    ...ARGS,
+    voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.V1', accessToken: 'token' },
+  }
+
+  beforeEach(() => {
+    h.state.conv = { ...HANDED_OFF }
+    h.state.messageRows = [goodbye(1)]
+  })
+
+  const nothingElseHappened = () => {
+    expect(h.generateReply).not.toHaveBeenCalled() // no fresh answer, no price
+    expect(h.state.rpcCalls).toEqual([]) // not a model reply: no slot used
+    expect(h.state.updatePayload).toBeNull() // still paused, same note
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled() // no second handed_off
+  }
+
+  it('sends the fixed line as a bot message, and nothing else', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-1', text: EN_WAIT, aiGenerated: true }),
+    )
+    nothingElseHappened()
+  })
+
+  it('in Arabic when the customer last wrote in Arabic', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'hello' },
+      { role: 'user', content: 'متى يرد علي أحد؟' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([AR_WAIT])
+  })
+
+  it('in English when the customer last wrote in English', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'مرحبا' },
+      { role: 'user', content: 'any update?' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('a voice note gets the text line: not listened to, no spoken reply', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'كم السعر؟' }])
+    await dispatchInboundToAiReply(VOICE)
+    expect(h.transcribeInboundVoiceNote).not.toHaveBeenCalled()
+    expect(h.sendVoiceReply).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([AR_WAIT])
+    nothingElseHappened()
+  })
+
+  it('also when the bot routed the chat to the handoff agent', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-7' }
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it.each([
+    ['a person paused the bot (no note)', () => (h.state.conv = { ...HANDED_OFF, ai_handoff_summary: null })],
+    [
+      'a connected system paused it (not the bot’s note)',
+      () => (h.state.conv = { ...HANDED_OFF, ai_handoff_summary: '⏸ AI agent paused by a connected system (API).' }),
+    ],
+    [
+      'a rep already replied from the app after the handoff',
+      () => (h.state.messageRows = [goodbye(3), repReplied(2)]),
+    ],
+    [
+      'a rep replied between two waiting lines',
+      () => (h.state.messageRows = [goodbye(5), waited(4), repReplied(3), waited(2)]),
+    ],
+    [
+      'a rep replied, then a Flow sent something',
+      () => (h.state.messageRows = [goodbye(5), repReplied(3), sentHoursAgo(1, { ai_generated: false })]),
+    ],
+    ['there is no bot message to count from', () => (h.state.messageRows = [])],
+    ['the bot is switched off', () => h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplyEnabled: false }))],
+    ['the account’s AI is off', () => h.loadAiConfig.mockResolvedValue(null)],
+    ['the customer is not a test number', () => (h.state.testNumbers = ['966511111111'])],
+  ])('stays silent when %s', async (_name, arrange) => {
+    arrange()
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    nothingElseHappened()
+  })
+
+  it.each([
+    ['a rep took the chat over but has not replied', () => (h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' })],
+    [
+      'the chat was reassigned away from the handoff agent',
+      () => {
+        h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+        h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' }
+      },
+    ],
+    [
+      'a Flow or automation sent something after the handoff',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { ai_generated: false })]),
+    ],
+    [
+      'several Flow sends went out after the handoff',
+      () =>
+        (h.state.messageRows = [goodbye(6), ...[5, 4, 3, 2, 1].map((n) => sentHoursAgo(n, { ai_generated: false }))]),
+    ],
+    [
+      'the API sent something after the handoff (no person behind it)',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { sender_type: 'agent', ai_generated: false })]),
+    ],
+    [
+      'a send failed (recorded with no person)',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { sender_type: 'agent', ai_generated: false, status: 'failed' })]),
+    ],
+  ])('still sends when %s: only a rep reply stops it', async (_name, arrange) => {
+    arrange()
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+    nothingElseHappened()
+  })
+
+  it('automated sends between waiting lines do not reset the count', async () => {
+    h.state.messageRows = [goodbye(10), waited(8), sentHoursAgo(7, { ai_generated: false }), waited(6), waited(4)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('a test number still gets it', async () => {
+    h.state.testNumbers = ['966500000000']
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('at most once every 30 minutes', async () => {
+    h.state.messageRows = [goodbye(2), sentHoursAgo(20 / 60, { content_text: EN_WAIT })]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+
+    h.state.messageRows = [goodbye(2), sentHoursAgo(31 / 60, { content_text: EN_WAIT })]
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('the gap counts the Arabic line too', async () => {
+    h.state.messageRows = [goodbye(2), waited(0.1, AR_WAIT)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('at most 3 times per handoff', async () => {
+    h.state.messageRows = [goodbye(10), waited(8), waited(6)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT]) // the third
+  })
+
+  it('never a fourth', async () => {
+    h.state.messageRows = [goodbye(10), waited(8), waited(6), waited(4)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+
+    h.state.messageRows = [goodbye(10), waited(8), waited(6), waited(4), waited(2)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('a new handoff starts a fresh count', async () => {
+    // Three lines for the first handoff, then Resume AI, the bot answered
+    // and handed off again (a new goodbye).
+    h.state.messageRows = [
+      goodbye(30),
+      waited(28),
+      waited(26),
+      waited(24),
+      sentHoursAgo(5, { content_text: 'Our price is 300 SAR.' }),
+      goodbye(4),
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('a new handoff minutes after a line still gets its own first line', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    // Resume AI, the bot answered and handed off again right away.
+    h.state.messageRows.push(
+      waited(0.05),
+      sentHoursAgo(0.04, { content_text: 'Our price is 300 SAR.' }),
+      goodbye(0.03),
+    )
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT, EN_WAIT])
+  })
+
+  it('two messages arriving together get one line', async () => {
+    await Promise.all([dispatchInboundToAiReply(ARGS), dispatchInboundToAiReply(ARGS)])
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('five messages in a row get one line', async () => {
+    for (let i = 0; i < 5; i++) await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+  })
+
+  it('after Resume AI the bot answers normally again', async () => {
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 0,
+      ai_handoff_summary: null,
+      ai_resumed_at: new Date().toISOString(),
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual(['Hello!'])
+  })
+
+  it('a failed send never throws', async () => {
+    h.engineSendText.mockRejectedValue(new Error('Meta down'))
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
   })
 })

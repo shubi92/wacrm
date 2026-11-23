@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { buildHandoffSummary, handoffFallbackMessage, isReplyCapSummary, replyCapSummary } from './handoff'
+import {
+  buildHandoffSummary,
+  handoffFallbackMessage,
+  isBotHandoffSummary,
+  isReplyCapSummary,
+  isWaitingMessage,
+  replyCapSummary,
+  waitingMessage,
+} from './handoff'
 import type { HandoffLead } from './lead'
 
 describe('buildHandoffSummary', () => {
@@ -168,5 +176,44 @@ describe('the reply-cap note', () => {
     expect(isReplyCapSummary(replyCapSummary(20))).toBe(true)
     expect(isReplyCapSummary(buildHandoffSummary({ messages: [], replyCount: 8 }))).toBe(false)
     expect(isReplyCapSummary(null)).toBe(false)
+  })
+})
+
+describe('isBotHandoffSummary', () => {
+  it('recognises every note the bot writes on a handoff', () => {
+    const messages = [{ role: 'user' as const, content: 'hi' }]
+    for (const note of [
+      buildHandoffSummary({ messages, replyCount: 0 }),
+      buildHandoffSummary({ messages, replyCount: 2, leadUnreadable: true }),
+      buildHandoffSummary({ messages, replyCount: 1, unsendable: { raw: 'x', retried: true } }),
+      replyCapSummary(3),
+    ]) {
+      expect(isBotHandoffSummary(note)).toBe(true)
+    }
+  })
+
+  it('not a pause a person or another system made', () => {
+    expect(isBotHandoffSummary(null)).toBe(false)
+    expect(isBotHandoffSummary('')).toBe(false)
+    expect(isBotHandoffSummary('⏸ AI agent paused by a connected system (API).')).toBe(false)
+  })
+})
+
+describe('waitingMessage', () => {
+  it('follows the language of the customer’s last message', () => {
+    expect(waitingMessage('وين الرد؟')).toBe(
+      'وصلت رسالتك 🌿 محادثتك الآن عند فريق المبيعات، وبيرد عليك أحد الزملاء في أقرب وقت.',
+    )
+    expect(waitingMessage('any news?')).toBe(
+      'We got your message. Your chat is now with our sales team, and one of them will reply as soon as possible.',
+    )
+    expect(waitingMessage('')).toBe(waitingMessage('any news?'))
+  })
+
+  it('is recognised in the chat afterwards, and the goodbye is not', () => {
+    expect(isWaitingMessage(waitingMessage('مرحبا'))).toBe(true)
+    expect(isWaitingMessage(waitingMessage('hello'))).toBe(true)
+    expect(isWaitingMessage(handoffFallbackMessage('hello'))).toBe(false)
+    expect(isWaitingMessage(null)).toBe(false)
   })
 })
