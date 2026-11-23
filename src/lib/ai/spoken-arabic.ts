@@ -55,18 +55,39 @@ function joinListLines(text: string): string {
   }, '')
 }
 
-// One pass, first alternative wins:
-//   1   phone / long run, 7+ digits ("+966 50 123 4567") → digit by digit
-//   2-3 clock time "7:30"
-//   4-7 number: optional "+", whole part (with or without a thousands
-//       comma), optional decimals, optional "%" or "m²" right after.
-// Digits glued to Latin letters ("A4", "5mm") are left alone.
-const NUMBER =
-  /(?<![\dA-Za-z])(\+?\d(?:[ -]?\d){6,})(?![\dA-Za-z])|(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])|(?<![\dA-Za-z.,+])(\+)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?( ?[%٪]| ?[mم]²)?(?![\dA-Za-z])/g
+const UNIT = String.raw`(?: ?(?:[%٪]|[mم][²2]))`
+/** One side of a range: a number with its optional "+", decimals and unit. */
+const SIDE = String.raw`\+?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?${UNIT}?`
+
+// One pass, first alternative wins. Digits glued to Latin letters
+// ("A4", "5mm") are left alone.
+const NUMBER = new RegExp(
+  [
+    // 1 phone shape → digit by digit: starts with "+" or "0" (spaces or
+    //   dashes allowed inside, 7+ digits), or 9+ digits with no separator
+    String.raw`(?<![\dA-Za-z])(\+\d(?:[ -]?\d){6,}|0\d(?:[ -]?\d){5,}|\d{9,})(?![\dA-Za-z])`,
+    // 2 date "2026-11-25" / "25/11/2026" → left exactly as written
+    String.raw`(?<![\dA-Za-z])(\d{1,4}[-/]\d{1,2}[-/]\d{1,4})(?![\dA-Za-z])`,
+    // 3-4 range "200–375", "300 - 450" → "<first> إلى <second>"
+    String.raw`(?<![\dA-Za-z.,+])(${SIDE}) ?[-–—] ?(${SIDE})(?![\dA-Za-z])`,
+    // 5-6 clock time "7:30"
+    String.raw`(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])`,
+    // 7-10 number: optional "+", whole part (with or without a thousands
+    //   comma), optional decimals, optional "%" or "m²"/"m2" right after
+    String.raw`(?<![\dA-Za-z.,+])(\+)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(${UNIT})?(?![\dA-Za-z])`,
+  ].join('|'),
+  'g',
+)
+
+/** Spell out every number in `text` (no list folding). */
+const speakAll = (text: string) => text.replace(NUMBER, speakNumber)
 
 function speakNumber(
   match: string,
   phone?: string,
+  date?: string,
+  from?: string,
+  to?: string,
   hh?: string,
   mm?: string,
   plus?: string,
@@ -75,6 +96,8 @@ function speakNumber(
   unit?: string,
 ): string {
   if (phone) return digitByDigit(phone)
+  if (date) return match
+  if (from && to) return `${speakAll(from)} إلى ${speakAll(to)}`
 
   if (hh) {
     const h = Number(hh)
@@ -101,7 +124,5 @@ function speakNumber(
 /** Arabic reply text → the same text with list markers folded and
  *  numbers spelled out. Leaves whitespace for the caller to collapse. */
 export function speakArabicNumbers(text: string): string {
-  return joinListLines(text)
-    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660))
-    .replace(NUMBER, speakNumber)
+  return speakAll(joinListLines(text).replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660)))
 }
