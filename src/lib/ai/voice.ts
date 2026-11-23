@@ -2,7 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { engineSendMedia } from '@/lib/flows/meta-send'
 import { loadVoiceConfig } from './config'
+import { isArabic } from './handoff'
 import { inspectOggOpus } from './ogg'
+import { speakArabicNumbers } from './spoken-arabic'
 import { transcribeAudio } from './providers/gemini'
 import {
   ELEVENLABS_MP3_FORMAT,
@@ -127,15 +129,16 @@ export async function transcribeInboundVoiceNote(
 
 /**
  * Strip what reads badly aloud: links, WhatsApp formatting marks and
- * emoji. The customer still gets all of it in the text reply.
+ * emoji. In an Arabic reply, numbered-list markers become comma pauses
+ * and numbers are spelled out as words (see `./spoken-arabic`). The
+ * customer still gets all of it, digits included, in the text reply.
  */
 export function toSpeakableText(text: string): string {
-  return text
+  const cleaned = text
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/[*_~`]/g, '')
     .replace(/\p{Extended_Pictographic}|️|‍/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return (isArabic(cleaned) ? speakArabicNumbers(cleaned) : cleaned).replace(/\s+/g, ' ').trim()
 }
 
 /**
