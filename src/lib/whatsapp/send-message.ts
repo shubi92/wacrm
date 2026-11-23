@@ -88,6 +88,9 @@ export interface SendMessageParams {
   /** Structured payload for `messageType === 'interactive'`. */
   interactivePayload?: InteractiveMessagePayload | null;
   replyToMessageId?: string | null;
+  /** The signed-in person sending from the inbox; unset for API sends.
+   *  Lets the bot tell a rep's reply from an automated one. */
+  senderId?: string | null;
 }
 
 export interface SendMessageResult {
@@ -201,6 +204,7 @@ export async function sendMessageToConversation(
     templateMessageParams,
     interactivePayload,
     replyToMessageId,
+    senderId,
   } = params;
 
   if (!conversationId) {
@@ -514,6 +518,7 @@ export async function sendMessageToConversation(
     .insert({
       conversation_id: conversationId,
       sender_type: 'agent',
+      sender_id: senderId || null,
       content_type: messageType,
       content_text: persistedText,
       media_url: mediaUrl || null,

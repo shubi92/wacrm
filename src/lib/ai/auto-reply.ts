@@ -161,7 +161,7 @@ export async function dispatchInboundToAiReply(
     // Not the bot's to answer — but a customer the bot handed to the team
     // and nobody has answered yet is told so (see `sendWaitingReply`).
     const notOurs = (c: NonNullable<typeof conv>) =>
-      sendWaitingReply(db, { ...args, config, conv: c })
+      sendWaitingReply(db, { ...args, conv: c })
     if (conv.assigned_agent_id) return await notOurs(conv) // a human owns this thread
     if (await startOverIfQuiet(db, conversationId, conv)) {
       // Re-read rather than assume: another inbound, or a person, may
@@ -487,14 +487,14 @@ export async function dispatchFormSubmissionToAiReply(
  * as a bot message. A voice note gets this text, not a spoken reply.
  *
  * Only when the pause is the bot's own handoff — its note is on the chat
- * (a person's pause writes none; Resume AI clears it) — and the chat is
- * unassigned or still with the handoff agent the bot routed it to.
- * Someone taking it over or reassigning it stops this.
+ * (a person's pause writes none; Resume AI clears it). Who the chat is
+ * assigned to does not matter: only a rep's reply stops this.
  *
  * Everything else is read from the chat's own outbound messages, newest
  * first, back to the handoff — the bot's last message that is not this
  * line (its goodbye, or its last answer):
- *   - anything a person, a Flow or the API sent since → never again
+ *   - a rep replied from the app since (`sender_id` set) → never again;
+ *     a Flow, automation or API send does not count
  *   - already sent `WAITING_MAX` times → done
  *   - sent less than `WAITING_GAP_MS` ago → not yet
  * A later handoff has a new goodbye, so its count starts fresh. No
@@ -503,31 +503,31 @@ export async function dispatchFormSubmissionToAiReply(
 async function sendWaitingReply(
   db: ReturnType<typeof supabaseAdmin>,
   args: DispatchArgs & {
-    config: AiConfig
     conv: {
-      assigned_agent_id: string | null
       ai_autoreply_disabled: boolean
       ai_handoff_summary?: string | null
     }
   },
 ): Promise<void> {
-  const { config, conv, accountId, conversationId, contactId } = args
+  const { conv, accountId, conversationId, contactId } = args
   if (!conv.ai_autoreply_disabled || !isBotHandoffSummary(conv.ai_handoff_summary)) return
-  if (conv.assigned_agent_id && conv.assigned_agent_id !== config.handoffAgentId) return
 
   const { data, error } = await db
     .from('messages')
-    .select('sender_type, ai_generated, content_text, created_at')
+    .select('sender_type, sender_id, ai_generated, content_text, created_at')
     .eq('conversation_id', conversationId)
     .in('sender_type', ['agent', 'bot'])
     .order('created_at', { ascending: false })
-    .limit(WAITING_MAX + 1)
+    // ponytail: enough to reach the goodbye past a few Flow/API sends;
+    // more automated sends than this in one handoff → silence.
+    .limit(20)
   if (error || !data) return
   let sent = 0
   let lastSentAt: string | undefined
   let handoffAt: string | undefined
   for (const m of data) {
-    if (m.ai_generated !== true) return // someone else has written since
+    if (m.sender_id) return // a rep replied from the app: they have it
+    if (m.ai_generated !== true) continue // a Flow, automation or API send
     if (!isWaitingMessage(m.content_text)) {
       handoffAt = m.created_at
       break

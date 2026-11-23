@@ -1069,7 +1069,7 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
     h.state.conv = CAPPED
     h.state.messageRows = [
       sentHoursAgo(30),
-      sentHoursAgo(3, { sender_type: 'agent', ai_generated: false }),
+      sentHoursAgo(3, { sender_type: 'agent', ai_generated: false, sender_id: 'user-3' }),
     ]
     await dispatchInboundToAiReply(ARGS)
     untouched()
@@ -1103,7 +1103,9 @@ describe('dispatchInboundToAiReply — a quiet day starts the chat over', () => 
     h.state.conv = { ...CAPPED, assigned_agent_id: 'agent-7' }
     h.state.messageRows = [sentHoursAgo(72)]
     await dispatchInboundToAiReply(ARGS)
-    untouched()
+    expect(h.state.updatePayload).toBeNull() // not lifted, still theirs
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(sentTexts()).toEqual([EN_WAIT]) // they have not replied yet
   })
 
   it('a chat at its cap but not paused: answered after a quiet day instead of handed off', async () => {
@@ -1360,6 +1362,9 @@ describe('dispatchInboundToAiReply — after a handoff, the customer is told the
     ai_resumed_at: null,
   }
   const goodbye = (hours: number) => sentHoursAgo(hours, { content_text: EN_LINE })
+  /** A person replied from the inbox: the send route records who. */
+  const repReplied = (hours: number) =>
+    sentHoursAgo(hours, { sender_type: 'agent', ai_generated: false, sender_id: 'user-3' })
   const waited = (hours: number, text = EN_WAIT) => sentHoursAgo(hours, { content_text: text })
   const VOICE = {
     ...ARGS,
@@ -1427,31 +1432,17 @@ describe('dispatchInboundToAiReply — after a handoff, the customer is told the
       'a connected system paused it (not the bot’s note)',
       () => (h.state.conv = { ...HANDED_OFF, ai_handoff_summary: '⏸ AI agent paused by a connected system (API).' }),
     ],
-    ['a rep took the chat over', () => (h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' })],
     [
-      'the chat was reassigned away from the handoff agent',
-      () => {
-        h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
-        h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' }
-      },
-    ],
-    [
-      'a rep already replied after the handoff',
-      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(2, { sender_type: 'agent', ai_generated: false })]),
+      'a rep already replied from the app after the handoff',
+      () => (h.state.messageRows = [goodbye(3), repReplied(2)]),
     ],
     [
       'a rep replied between two waiting lines',
-      () =>
-        (h.state.messageRows = [
-          goodbye(5),
-          waited(4),
-          sentHoursAgo(3, { sender_type: 'agent', ai_generated: false }),
-          waited(2),
-        ]),
+      () => (h.state.messageRows = [goodbye(5), waited(4), repReplied(3), waited(2)]),
     ],
     [
-      'a Flow or the API sent something after the handoff',
-      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { sender_type: 'bot', ai_generated: false })]),
+      'a rep replied, then a Flow sent something',
+      () => (h.state.messageRows = [goodbye(5), repReplied(3), sentHoursAgo(1, { ai_generated: false })]),
     ],
     ['there is no bot message to count from', () => (h.state.messageRows = [])],
     ['the bot is switched off', () => h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplyEnabled: false }))],
@@ -1462,6 +1453,45 @@ describe('dispatchInboundToAiReply — after a handoff, the customer is told the
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
     nothingElseHappened()
+  })
+
+  it.each([
+    ['a rep took the chat over but has not replied', () => (h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' })],
+    [
+      'the chat was reassigned away from the handoff agent',
+      () => {
+        h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+        h.state.conv = { ...HANDED_OFF, assigned_agent_id: 'agent-3' }
+      },
+    ],
+    [
+      'a Flow or automation sent something after the handoff',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { ai_generated: false })]),
+    ],
+    [
+      'several Flow sends went out after the handoff',
+      () =>
+        (h.state.messageRows = [goodbye(6), ...[5, 4, 3, 2, 1].map((n) => sentHoursAgo(n, { ai_generated: false }))]),
+    ],
+    [
+      'the API sent something after the handoff (no person behind it)',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { sender_type: 'agent', ai_generated: false })]),
+    ],
+    [
+      'a send failed (recorded with no person)',
+      () => (h.state.messageRows = [goodbye(3), sentHoursAgo(1, { sender_type: 'agent', ai_generated: false, status: 'failed' })]),
+    ],
+  ])('still sends when %s: only a rep reply stops it', async (_name, arrange) => {
+    arrange()
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([EN_WAIT])
+    nothingElseHappened()
+  })
+
+  it('automated sends between waiting lines do not reset the count', async () => {
+    h.state.messageRows = [goodbye(10), waited(8), sentHoursAgo(7, { ai_generated: false }), waited(6), waited(4)]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
   it('a test number still gets it', async () => {
