@@ -1702,14 +1702,20 @@ describe('dispatchInboundToAiReply — after a handoff, until a rep takes over',
     })
   })
 
-  it('there is no bot message to count from: the model may still answer a new request', async () => {
+  it('there is no bot message to count from: silent (a rep reply may lie further back)', async () => {
     h.state.messageRows = []
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled() // same matter: no line to count from
+    silent()
+  })
 
-    h.generateReply.mockResolvedValue({ text: 'Sofa cleaning is 150 SAR.', handoff: false, tagged: true, waiting: false })
+  it('20 automatic sends since the handoff hide the goodbye: silent, no model call, no line', async () => {
+    h.state.messageRows = [
+      // All over a day old, so the 24-hour guard does not step in.
+      goodbye(60),
+      ...Array.from({ length: 20 }, (_, i) => automaticApiSend(50 - i)),
+    ]
     await dispatchInboundToAiReply(ARGS)
-    expect(sentTexts()).toEqual(['Sofa cleaning is 150 SAR.'])
+    silent()
   })
 
   it('after Resume AI the bot answers normally again', async () => {

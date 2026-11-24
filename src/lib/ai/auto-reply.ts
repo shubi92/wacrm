@@ -531,7 +531,8 @@ type ConvRow = {
  *     assigns itself
  *   - a rep replied since the handoff: from the inbox, or through the
  *     API with `sent_by_person` (both store a sender; see `readHandoff`)
- * A read error counts as taken (silence rather than over-reply).
+ * A read error, or no bot message to count from, counts as taken
+ * (silence rather than over-reply).
  * ponytail: a person assigning the chat to the handoff agent themself
  * looks like the bot's own assignment; that agent's first reply counts.
  */
@@ -543,7 +544,9 @@ async function botStillHolds(
 ): Promise<boolean> {
   if (!handedOffByBot(conv, config)) return false
   const read = await readHandoff(db, conversationId)
-  return !!read && !read.repReplied
+  // No bot message found to stop at: a rep reply may lie further back,
+  // so the chat counts as taken.
+  return !!read && !read.repReplied && !!read.handoffAt
 }
 
 /** The pause and assignment are the bot's own handoff's (see `botStillHolds`). */
@@ -573,7 +576,9 @@ async function readHandoff(
     .in('sender_type', ['agent', 'bot'])
     .order('created_at', { ascending: false })
     // ponytail: enough to reach the goodbye past a few Flow/API sends;
-    // more automated sends than this in one handoff → no waiting line.
+    // more automated sends than this in one handoff → the bot's message
+    // is out of reach, so the chat counts as taken: no model call, no
+    // waiting line (see `botStillHolds`).
     .limit(20)
   if (error || !data) return null
   let sent = 0
