@@ -46,6 +46,17 @@ describe('buildSystemPrompt — after Resume AI', () => {
   })
 })
 
+describe('buildSystemPrompt — after its own handoff, nobody has taken the chat', () => {
+  it('carries the note and the [[WAITING]] rule after the account\'s own instructions, in auto-reply only', () => {
+    const note = '🤖 AI agent handed off after 2 replies. The bot chose to hand off.'
+    const prompt = buildSystemPrompt({ userPrompt: 'ACCOUNT RULES', mode: 'auto_reply', handedOff: note })
+    expect(prompt).toContain(note)
+    expect(prompt.indexOf('[[WAITING]]')).toBeGreaterThan(prompt.indexOf('ACCOUNT RULES'))
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })).not.toContain('[[WAITING]]')
+    expect(buildSystemPrompt({ userPrompt: null, mode: 'draft', handedOff: note })).not.toContain('[[WAITING]]')
+  })
+})
+
 describe('buildSystemPrompt — lead block on any handoff', () => {
   it('asks for the block whenever it hands off with something collected, with a separate "ready" flag', () => {
     const prompt = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })

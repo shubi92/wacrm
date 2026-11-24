@@ -143,6 +143,18 @@ describe('parseGeneration', () => {
   })
 })
 
+describe('parseGeneration — [[WAITING]] after a handoff', () => {
+  it('reads the marker and never lets it reach the customer', () => {
+    const r = parseGeneration('<reply>[[WAITING]]</reply>')
+    expect(r).toMatchObject({ waiting: true, handoff: false, tagged: true, text: '' })
+  })
+
+  it('does not take a marker mentioned in reasoning before the reply', () => {
+    const r = parseGeneration('No need for [[WAITING]] here. <reply>Sofa cleaning is 150 SAR.</reply>')
+    expect(r).toMatchObject({ waiting: false, text: 'Sofa cleaning is 150 SAR.' })
+  })
+})
+
 describe('parseGeneration — a form to send with the reply', () => {
   it('reads the form after the reply tags', () => {
     expect(parseGeneration('<reply>Tap below to tell us about your move.</reply>[[FORM:furniture_moving]]')).toMatchObject({

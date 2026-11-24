@@ -23,8 +23,9 @@
 //       "params": ["A123"] | { "body": [...] }   // array = positional body; object = structured
 //     },
 //     "reply_to_message_id": "<uuid>",       // optional, must be in the same conversation
-//     "name": "Jane Doe"                     // optional, names a newly-created contact
-//   }
+//     "name": "Jane Doe",                    // optional, names a newly-created contact
+//     "sent_by_person": true                 // optional, default false: a person wrote this
+//   }                                        // (a rep's reply) — the AI bot then stays quiet
 //
 // Response (201):
 //   { "data": { "message_id", "whatsapp_message_id", "conversation_id",
@@ -59,6 +60,10 @@ export async function POST(request: Request) {
     }
 
     const type = typeof body.type === 'string' ? body.type : 'text';
+
+    if (body.sent_by_person !== undefined && typeof body.sent_by_person !== 'boolean') {
+      return fail('bad_request', "'sent_by_person' must be true or false", 400);
+    }
 
     // Unpack the optional `template` object into the flat params the
     // send core expects. `params` as an array → legacy positional body
@@ -124,6 +129,13 @@ export async function POST(request: Request) {
           typeof body.reply_to_message_id === 'string'
             ? body.reply_to_message_id
             : null,
+        // A person wrote it (a rep replying from the caller's own app):
+        // stored like an inbox reply, with a sender, so the AI bot treats
+        // the chat as taken over. Automatic sends leave it unset.
+        // ponytail: the sender is the key's creator (or the key itself if
+        // that user is gone) — the caller's rep has no user here.
+        senderId:
+          body.sent_by_person === true ? (ctx.createdBy ?? ctx.keyId) : null,
       }
     );
 

@@ -146,6 +146,12 @@ curl -X POST https://your-crm.example.com/api/v1/messages \
 }
 ```
 
+`sent_by_person` (optional, `true` / `false`, default `false`): set it
+to `true` when a person wrote the message, for example a sales rep
+replying from your own app. The AI bot then treats the chat as taken
+over by the team and stops answering it until someone clicks Resume AI.
+Leave it out for automatic messages (booking confirmations, reminders).
+
 Response (201):
 
 ```json
