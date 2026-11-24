@@ -126,3 +126,23 @@ function speakNumber(
 export function speakArabicNumbers(text: string): string {
   return speakAll(joinListLines(text).replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660)))
 }
+
+/** Words the voice misreads without vowel marks, spelled exactly as it
+ *  should be given them. One line per word. */
+const MARKED_WORDS = [
+  'أَبشِر', // "sure, right away", to a man
+  'أَبشِري', // same, to a woman
+]
+
+const MARKS = String.raw`[\u064B-\u065F\u0670]`
+/** Standalone word, with or without marks, on a hamza or a plain alef. */
+const MARKED_WORD_PATTERNS = MARKED_WORDS.map((spoken) => {
+  const letters = [...spoken.replace(new RegExp(MARKS, 'g'), '')]
+  const body = letters.map((c) => (/[اأ]/.test(c) ? '[اأ]' : c) + `${MARKS}*`).join('')
+  return { spoken, pattern: new RegExp(`(?<!\\p{L}|${MARKS})${body}(?!\\p{L}|${MARKS})`, 'gu') }
+})
+
+/** Arabic reply text → the same text with `MARKED_WORDS` vowel-marked. */
+export function markSpokenWords(text: string): string {
+  return MARKED_WORD_PATTERNS.reduce((out, w) => out.replace(w.pattern, w.spoken), text)
+}
