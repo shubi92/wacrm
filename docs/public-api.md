@@ -348,9 +348,9 @@ delivery uuid you can dedupe on, and `data` varies by `event`:
 
 #### `conversation.handed_off`
 
-Fires once each time the AI auto-reply agent stops answering a
-conversation and hands it to a person — never for a human pausing the
-bot by hand.
+Fires once each time the AI auto-reply agent hands a conversation to a
+person — never for a human pausing the bot by hand. Until a person takes
+the chat, the agent may still answer new requests on it.
 
 ```jsonc
 {
@@ -376,7 +376,7 @@ bot by hand.
 | `bot_cannot_help`   | The bot decided a person should answer                         |
 | `reply_cap`         | The bot used up its replies for this conversation              |
 | `voice_note_failed` | A voice note could not be turned into text                     |
-| `other`             | Anything else — e.g. the bot's output could not be sent, or its lead details could not be read |
+| `other`             | Anything else — e.g. the bot's output could not be sent, or its lead details could not be read, or the customer sent a video, photo or file that a person should look at (the `summary` says which) |
 
 `reason` alone says whether the customer said yes. `lead` is what the bot
 had collected at the handoff, for **any** reason: it is an object

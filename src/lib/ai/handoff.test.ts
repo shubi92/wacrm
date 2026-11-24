@@ -3,8 +3,11 @@ import {
   buildHandoffSummary,
   handoffFallbackMessage,
   isBotHandoffSummary,
+  isMediaSummary,
   isReplyCapSummary,
   isWaitingMessage,
+  mediaMessage,
+  mediaSummary,
   replyCapSummary,
   waitingMessage,
 } from './handoff'
@@ -137,11 +140,10 @@ describe('buildHandoffSummary — ready customer', () => {
 })
 
 describe('handoffFallbackMessage', () => {
-  it('is Arabic for Arabic script and English otherwise', () => {
+  it('is English only for Latin letters with no Arabic, Arabic otherwise', () => {
     expect(handoffFallbackMessage('كم السعر؟')).toMatch(/[\u0600-\u06FF]/)
     expect(handoffFallbackMessage('ok تمام')).toMatch(/[\u0600-\u06FF]/)
     expect(handoffFallbackMessage('What services do you provide?')).toMatch(/^Your request/)
-    expect(handoffFallbackMessage('')).toMatch(/^Your request/)
   })
 })
 
@@ -207,7 +209,6 @@ describe('waitingMessage', () => {
     expect(waitingMessage('any news?')).toBe(
       'We got your message. Your chat is now with our sales team, and one of them will reply as soon as possible.',
     )
-    expect(waitingMessage('')).toBe(waitingMessage('any news?'))
   })
 
   it('is recognised in the chat afterwards, and the goodbye is not', () => {
@@ -215,5 +216,29 @@ describe('waitingMessage', () => {
     expect(isWaitingMessage(waitingMessage('hello'))).toBe(true)
     expect(isWaitingMessage(handoffFallbackMessage('hello'))).toBe(false)
     expect(isWaitingMessage(null)).toBe(false)
+  })
+})
+
+describe('mediaSummary', () => {
+  it('is a bot handoff note of its own, never the reply cap’s', () => {
+    const note = mediaSummary('image')
+    expect(isBotHandoffSummary(note)).toBe(true)
+    expect(isMediaSummary(note)).toBe(true)
+    expect(isReplyCapSummary(note)).toBe(false)
+    expect(isMediaSummary(replyCapSummary(3))).toBe(false)
+  })
+})
+
+describe('the language of every fixed line', () => {
+  const lines = (text: string) => [
+    handoffFallbackMessage(text),
+    waitingMessage(text),
+    mediaMessage('image', text),
+  ]
+  it.each(['', '4', '٤', '؟', '?', '👍', '+966 50 000 0000', 'تمام', 'ok تمام'])('%j gets Arabic', (text) => {
+    for (const line of lines(text)) expect(line).toMatch(/[\u0600-\u06FF]/)
+  })
+  it.each(['ok', 'ok 👍', 'How much for 4 ACs?'])('%j gets English', (text) => {
+    for (const line of lines(text)) expect(line).not.toMatch(/[\u0600-\u06FF]/)
   })
 })

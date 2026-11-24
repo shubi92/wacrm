@@ -7,15 +7,15 @@ const MAX_QUOTE_LEN = 160
 
 /**
  * What the customer is told when the bot hands off without a message of
- * its own — a handoff must never be met with silence. Arabic when the
- * customer wrote in Arabic script, English otherwise.
+ * its own — a handoff must never be met with silence. Arabic or English
+ * by `isEnglish`.
  * ponytail: two fixed lines; move to ai_configs if an account needs its
  * own wording.
  */
 export function handoffFallbackMessage(lastCustomerText: string): string {
-  return isArabic(lastCustomerText)
-    ? 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
-    : 'Your request has been passed to our team and they will contact you shortly.'
+  return isEnglish(lastCustomerText)
+    ? 'Your request has been passed to our team and they will contact you shortly.'
+    : 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
 }
 
 const WAITING_AR = 'وصلت رسالتك 🌿 محادثتك الآن عند فريق المبيعات، وبيرد عليك أحد الزملاء في أقرب وقت.'
@@ -28,12 +28,49 @@ const WAITING_EN =
  * a fresh answer. Same language rule as `handoffFallbackMessage`.
  */
 export function waitingMessage(lastCustomerText: string): string {
-  return isArabic(lastCustomerText) ? WAITING_AR : WAITING_EN
+  return isEnglish(lastCustomerText) ? WAITING_EN : WAITING_AR
 }
 
 /** True for a message the bot sent with `waitingMessage`. */
 export function isWaitingMessage(text: string | null | undefined): boolean {
   return text === WAITING_AR || text === WAITING_EN
+}
+
+/** A video, photo or file the customer sent — the bot can't open it. */
+export interface InboundMedia {
+  kind: 'video' | 'image' | 'document'
+  /** What the customer typed under it, if anything. */
+  caption?: string
+}
+
+/** What a customer who sends one is told, per kind. */
+const MEDIA_LINES: Record<InboundMedia['kind'], { name: string; ar: string; en: string }> = {
+  video: {
+    name: 'video',
+    ar: 'وصلني المقطع 🌿 بيشوفه أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.',
+    en: "Got your video. A colleague from our sales team will take a look. Meanwhile, tell me which service you need and I'll help.",
+  },
+  image: {
+    name: 'photo',
+    ar: 'وصلتني الصورة 🌿 بيشوفها أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.',
+    en: "Got your photo. A colleague from our sales team will take a look. Meanwhile, tell me which service you need and I'll help.",
+  },
+  document: {
+    name: 'file',
+    ar: 'وصلني الملف 🌿 بيشوفه أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.',
+    en: "Got your file. A colleague from our sales team will take a look. Meanwhile, tell me which service you need and I'll help.",
+  },
+}
+
+/** Same language rule as `waitingMessage`. */
+export function mediaMessage(kind: InboundMedia['kind'], lastCustomerText: string): string {
+  return isEnglish(lastCustomerText) ? MEDIA_LINES[kind].en : MEDIA_LINES[kind].ar
+}
+
+/** Language of the bot's fixed lines: English only for Latin letters with
+ *  no Arabic. A number, "؟", an emoji or nothing says nothing: Arabic. */
+function isEnglish(text: string): boolean {
+  return /\p{Script=Latin}/u.test(text) && !isArabic(text)
 }
 
 /** True when the text has any Arabic script in it. */
@@ -66,6 +103,30 @@ export function replyCapSummary(maxReplies: number): string {
  */
 export function isReplyCapSummary(summary: string | null | undefined): boolean {
   return !!summary?.startsWith(REPLY_CAP_NOTE)
+}
+
+const MEDIA_NOTE = `${BOT_HANDOFF_NOTE} one thing only: `
+
+/** What the note says the customer sent, e.g. to add to the cap's note. */
+export function mediaReceivedNote(kind: InboundMedia['kind']): string {
+  return `The customer sent a ${MEDIA_LINES[kind].name} that needs a look.`
+}
+
+/**
+ * The internal note for media the bot can't open. The model reads it too
+ * (`handedOff` in `buildSystemPrompt`), so it says that only the looking
+ * was handed off — everything else is still the bot's.
+ */
+export function mediaSummary(kind: InboundMedia['kind']): string {
+  return (
+    `${MEDIA_NOTE}looking at a ${MEDIA_LINES[kind].name}. ${mediaReceivedNote(kind)} ` +
+    'Nothing else was handed off: the service they need, prices, booking, and whatever they were already discussing with the bot are separate requests that the bot still answers.'
+  )
+}
+
+/** True when the chat's pause is only the flag `mediaSummary` describes. */
+export function isMediaSummary(summary: string | null | undefined): boolean {
+  return !!summary?.startsWith(MEDIA_NOTE)
 }
 
 /**

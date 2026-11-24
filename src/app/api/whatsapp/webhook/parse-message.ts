@@ -1,4 +1,5 @@
 import { getMediaUrl } from '@/lib/whatsapp/meta-api'
+import type { InboundMedia } from '@/lib/ai/handoff'
 import type { InboundVoiceNote } from '@/lib/ai/voice'
 
 // Turns one inbound Meta message into what we store. Lives outside
@@ -54,6 +55,17 @@ export function inboundVoiceNote(
     whatsappMessageId: message.id,
     accessToken,
   }
+}
+
+/**
+ * The video, photo or document the AI auto-reply bot should acknowledge.
+ * With or without a caption: the bot's context holds no media rows, so a
+ * caption never reaches the model. A document's file name isn't one.
+ */
+export function inboundMedia(message: WhatsAppMessage): InboundMedia | undefined {
+  const kind = message.type
+  if (kind !== 'video' && kind !== 'image' && kind !== 'document') return undefined
+  return { kind, caption: message[kind]?.caption?.trim() || undefined }
 }
 
 export async function parseMessageContent(
