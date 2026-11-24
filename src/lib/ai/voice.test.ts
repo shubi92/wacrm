@@ -260,6 +260,41 @@ describe('toSpeakableText', () => {
     expect(toSpeakableText(written)).toBe(spoken)
   })
 
+  // Exact code points of the tester's spelling ("sure, right away").
+  const MAN = '\u0623\u064E\u0628\u0634\u0650\u0631'
+  const WOMAN = `${MAN}\u064A`
+  it.each([
+    ['أبشر', MAN],
+    ['ابشر', MAN],
+    ['أبشري', WOMAN],
+    ['ابشري', WOMAN],
+    ['أبشر، وصل طلبك', `${MAN}، وصل طلبك`],
+    ['أبشر! ابشري؟ ابشر.', `${MAN}! ${WOMAN}؟ ${MAN}.`],
+    ['طيب (*أبشر*)', `طيب (${MAN})`],
+    ['👍أبشر❤️طال عمرك', `${MAN}طال عمرك`],
+    ['❤️ابشري', WOMAN],
+    ['تم\nابشري\nنخدمك', `تم ${WOMAN} نخدمك`],
+    // With the number conversion in the same reply.
+    ['أبشر، السعر 345 ريال شامل الضريبة.', `${MAN}، السعر ثلاثمئة وخمسة وأربعين ريال شامل الضريبة.`],
+    ['1. ابشري\n2. السعر 230 ريال', `${WOMAN}، السعر مئتين وثلاثين ريال`],
+    // Already marked, fully, partly or differently → exactly the tester's form.
+    [MAN, MAN],
+    [WOMAN, WOMAN],
+    ['\u0627\u064E\u0628\u0652\u0634\u0650\u0631\u0652', MAN],
+    ['\u0623\u0628\u0652\u0634\u0650\u0631\u0650\u064A،', `${WOMAN}،`],
+  ])('gives the voice the marked form of %j', (written, spoken) => {
+    expect(toSpeakableText(written)).toBe(spoken)
+  })
+
+  // Letters attached before or after: a different word.
+  it.each([
+    'أبشروا', 'نبشرك', 'بشرى', 'وأبشر', 'فابشري', 'أبشرك', 'أبشرين', 'تباشر',
+    '\u0648\u064E\u0623\u0628\u0634\u0631', // marked prefix
+    '\u0623\u0628\u0634\u0650\u0631\u064F\u0648\u0627', // marked ending
+  ])('leaves the different word %j as written', (word) => {
+    expect(toSpeakableText(`قلنا ${word} اليوم`)).toBe(`قلنا ${word} اليوم`)
+  })
+
   it('leaves an English reply as it was', () => {
     const english = 'Two options:\n1. Standard: 230 SAR\n2. Odourless: 345 SAR, from 7:30 or call +966501234567.'
     expect(toSpeakableText(english)).toBe(
@@ -296,6 +331,16 @@ describe('sendVoiceReply', () => {
       aiGenerated: true,
       previewText: SPEAK.text,
     })
+  })
+
+  it('speaks the marked word but keeps the written one unmarked', async () => {
+    await sendVoiceReply(fakeDb(), { ...SPEAK, text: 'أبشر، السعر 300 ريال' })
+    expect(h.synthesizeSpeech.mock.calls[0][0].text).toBe(
+      '\u0623\u064E\u0628\u0634\u0650\u0631، السعر ثلاثمئة ريال',
+    )
+    expect(h.engineSendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ previewText: 'أبشر، السعر 300 ريال' }),
+    )
   })
 
   it('falls back to MP3 as an ordinary audio message when the bytes are not Ogg/Opus', async () => {

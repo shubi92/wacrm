@@ -4,7 +4,7 @@ import { engineSendMedia } from '@/lib/flows/meta-send'
 import { loadVoiceConfig } from './config'
 import { isArabic } from './handoff'
 import { inspectOggOpus } from './ogg'
-import { speakArabicNumbers } from './spoken-arabic'
+import { markSpokenWords, speakArabicNumbers } from './spoken-arabic'
 import { transcribeAudio } from './providers/gemini'
 import {
   ELEVENLABS_MP3_FORMAT,
@@ -130,11 +130,13 @@ export async function transcribeInboundVoiceNote(
 /**
  * Strip what reads badly aloud: links, WhatsApp formatting marks and
  * emoji. In an Arabic reply, numbered-list markers become comma pauses
- * and numbers are spelled out as words (see `./spoken-arabic`). The
- * customer still gets all of it, digits included, in the text reply.
+ * and numbers are spelled out as words, and a few misread words get
+ * their vowel marks (see `./spoken-arabic`). The customer still gets
+ * all of it, digits included, in the text reply.
  */
 export function toSpeakableText(text: string): string {
-  const cleaned = text
+  // Words first: dropping an emoji can glue two words together.
+  const cleaned = markSpokenWords(text)
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/[*_~`]/g, '')
     .replace(/\p{Extended_Pictographic}|️|‍/gu, '')
