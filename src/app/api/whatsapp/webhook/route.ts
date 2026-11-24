@@ -2,6 +2,7 @@ import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import {
+  inboundMedia,
   inboundVoiceNote,
   parseMessageContent,
   type WhatsAppMessage,
@@ -792,7 +793,8 @@ async function processMessage(
   }
 
   // AI auto-reply. Runs only for plain-text inbound — or a voice note,
-  // which the bot turns into text first — that the deterministic flow
+  // which the bot turns into text first, or a video / photo / document,
+  // which it acknowledges and flags — that the deterministic flow
   // runner did NOT consume (flows win over the LLM), and only when the
   // account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
@@ -800,7 +802,8 @@ async function processMessage(
   const voiceNote = inboundText.trim()
     ? undefined
     : inboundVoiceNote(message, accessToken)
-  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote)) {
+  const media = inboundMedia(message)
+  if (!flowConsumed && !interactiveReplyId && (inboundText.trim() || voiceNote || media)) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
@@ -808,6 +811,7 @@ async function processMessage(
       configOwnerUserId,
       fromPhone: message.from,
       voiceNote,
+      media,
     })
   }
 

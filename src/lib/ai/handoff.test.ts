@@ -3,8 +3,10 @@ import {
   buildHandoffSummary,
   handoffFallbackMessage,
   isBotHandoffSummary,
+  isMediaSummary,
   isReplyCapSummary,
   isWaitingMessage,
+  mediaSummary,
   replyCapSummary,
   waitingMessage,
 } from './handoff'
@@ -215,5 +217,15 @@ describe('waitingMessage', () => {
     expect(isWaitingMessage(waitingMessage('hello'))).toBe(true)
     expect(isWaitingMessage(handoffFallbackMessage('hello'))).toBe(false)
     expect(isWaitingMessage(null)).toBe(false)
+  })
+})
+
+describe('mediaSummary', () => {
+  it('is a bot handoff note of its own, never the reply cap’s', () => {
+    const note = mediaSummary('image')
+    expect(isBotHandoffSummary(note)).toBe(true)
+    expect(isMediaSummary(note)).toBe(true)
+    expect(isReplyCapSummary(note)).toBe(false)
+    expect(isMediaSummary(replyCapSummary(3))).toBe(false)
   })
 })

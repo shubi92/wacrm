@@ -1732,3 +1732,251 @@ describe('dispatchInboundToAiReply — after a handoff, until a rep takes over',
     expect(h.generateReply.mock.calls[0][0].systemPrompt).not.toContain('[[WAITING]]')
   })
 })
+
+describe('dispatchInboundToAiReply — a video, photo or document', () => {
+  const media = (kind: 'video' | 'image' | 'document', caption?: string) => ({ ...ARGS, media: { kind, caption } })
+  const VIDEO_AR = 'وصلني المقطع 🌿 بيشوفه أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.'
+  const PHOTO_AR = 'وصلتني الصورة 🌿 بيشوفها أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.'
+  const FILE_AR = 'وصلني الملف 🌿 بيشوفه أحد الزملاء من فريق المبيعات. ولين يرد عليك، قل لي وش الخدمة اللي تحتاجها وأنا أخدمك.'
+  const VIDEO_EN =
+    "Got your video. A colleague from our sales team will take a look. Meanwhile, tell me which service you need and I'll help."
+  const ANSWER = { text: 'Sofa cleaning is 150 SAR.', handoff: false, tagged: true, waiting: false }
+
+  beforeEach(() => {
+    h.generateReply.mockReset()
+    h.generateReply.mockResolvedValue(ANSWER)
+    h.buildConversationContext.mockResolvedValue([]) // the customer has written nothing yet
+    // A real send leaves a bot message on the chat.
+    h.engineSendText.mockImplementation(async ({ text }) => {
+      h.state.messageRows.push(sentHoursAgo(0, { content_text: text, sender_id: null }))
+      return { whatsapp_message_id: 'm1' }
+    })
+  })
+  const nothing = () => {
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  }
+
+  it('a video: the fixed line and the flag, no model call, no reply slot', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    await dispatchInboundToAiReply(media('video'))
+    expect(h.engineSendText).toHaveBeenCalledWith(expect.objectContaining({ text: VIDEO_AR, aiGenerated: true }))
+    expect(sentTexts()).toEqual([VIDEO_AR])
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.state.rpcCalls).toEqual([])
+    expect(h.state.updatePayload).toEqual({
+      ai_autoreply_disabled: true,
+      ai_handoff_summary: expect.stringContaining('The customer sent a video that needs a look.'),
+      assigned_agent_id: 'agent-7',
+    })
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(h.dispatchWebhookEvent.mock.calls[0][2]).toBe('conversation.handed_off')
+    expect(h.dispatchWebhookEvent.mock.calls[0][3]).toMatchObject({ reason: 'other', lead: null })
+  })
+
+  it.each([
+    ['image', PHOTO_AR, 'sent a photo'],
+    ['document', FILE_AR, 'sent a file'],
+  ] as const)('a %s has its own wording', async (kind, line, note) => {
+    await dispatchInboundToAiReply(media(kind))
+    expect(sentTexts()).toEqual([line])
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain(note)
+  })
+
+  it('in English when the customer last wrote in English', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'مرحبا' },
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'أهلاً' },
+    ])
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toEqual([VIDEO_EN])
+  })
+
+  it('a caption counts as the customer’s last text for the language', async () => {
+    await dispatchInboundToAiReply(media('video', 'how much for this?'))
+    expect(sentTexts()).toEqual([VIDEO_EN])
+  })
+
+  it('in Arabic when only we have written (in English)', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'assistant', content: 'Hello' }])
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toEqual([VIDEO_AR])
+  })
+
+  it('three photos in a row, or at once, get one line and one flag', async () => {
+    await dispatchInboundToAiReply(media('image'))
+    await Promise.all([dispatchInboundToAiReply(media('image')), dispatchInboundToAiReply(media('image'))])
+    expect(sentTexts()).toEqual([PHOTO_AR])
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('an album landing at once gets one line and one flag', async () => {
+    await Promise.all([1, 2, 3].map(() => dispatchInboundToAiReply(media('image'))))
+    expect(sentTexts()).toEqual([PHOTO_AR])
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('another line after 30 minutes, still one handoff', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      await dispatchInboundToAiReply(media('image'))
+      vi.setSystemTime(Date.now() + 29 * 60_000)
+      await dispatchInboundToAiReply(media('image'))
+      expect(sentTexts()).toEqual([PHOTO_AR])
+      vi.setSystemTime(Date.now() + 2 * 60_000)
+      await dispatchInboundToAiReply(media('video'))
+      expect(sentTexts()).toEqual([PHOTO_AR, VIDEO_AR])
+      expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a chat the bot already handed off: the line, no second handoff', async () => {
+    const note = '🤖 AI agent handed off after 2 replies. The bot chose to hand off.'
+    h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true, ai_handoff_summary: note }
+    h.state.messageRows = [sentHoursAgo(1, { content_text: AR_LINE, sender_id: null })]
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toEqual([VIDEO_AR])
+    expect(h.state.updatePayload).toBeNull()
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+  })
+
+  it('a waiting line does not count against it, nor it against the waiting line', async () => {
+    const SAME_MATTER = { text: '', handoff: false, tagged: true, waiting: true }
+    h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true, ai_handoff_summary: '🤖 AI agent handed off.' }
+    h.state.messageRows = [
+      sentHoursAgo(5, { content_text: AR_LINE, sender_id: null }),
+      ...[3, 2, 0.1].map((x) => sentHoursAgo(x, { content_text: AR_WAIT, sender_id: null })),
+    ]
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toEqual([VIDEO_AR])
+    h.generateReply.mockResolvedValue(SAME_MATTER)
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'شفتوا المقطع؟' }])
+    await dispatchInboundToAiReply(ARGS)
+    expect(sentTexts()).toEqual([VIDEO_AR, AR_WAIT])
+  })
+
+  describe('afterwards the bot still answers', () => {
+    beforeEach(async () => {
+      await dispatchInboundToAiReply(media('video'))
+      h.engineSendText.mockClear()
+      h.dispatchWebhookEvent.mockClear()
+      h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'how much is sofa cleaning?' }])
+    })
+
+    it('a typed price question reaches the model, told only the looking was handed off', async () => {
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.generateReply.mock.calls[0][0].systemPrompt).toContain(
+        '«🤖 AI agent handed off one thing only: looking at a video. The customer sent a video that needs a look. Nothing else was handed off:',
+      )
+      expect(sentTexts()).toEqual([ANSWER.text])
+      expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
+    })
+
+    it('a voice note still follows its own path', async () => {
+      await dispatchInboundToAiReply({
+        ...ARGS,
+        voiceNote: { mediaId: 'media-1', whatsappMessageId: 'wamid.V1', accessToken: 'token' },
+      })
+      expect(h.transcribeInboundVoiceNote).toHaveBeenCalledTimes(1)
+      expect(sentTexts()).toEqual([ANSWER.text])
+      expect(h.sendVoiceReply).toHaveBeenCalledTimes(1)
+    })
+
+    it('once a rep replies, another video gets nothing', async () => {
+      h.state.messageRows.push(sentHoursAgo(-0.01, { sender_type: 'agent', ai_generated: false, sender_id: 'user-3' }))
+      h.state.updatePayload = null
+      __resetRateLimitForTests()
+      await dispatchInboundToAiReply(media('video'))
+      nothing()
+    })
+
+    it('Resume AI, then another photo: flagged and answered again', async () => {
+      h.state.conv = { ...h.state.conv, ai_autoreply_disabled: false, ai_handoff_summary: null, ai_resumed_at: new Date().toISOString() }
+      await dispatchInboundToAiReply(media('image'))
+      expect(sentTexts()).toHaveLength(1)
+      expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('a photo that lands while the model is answering a typed message', () => {
+    const withPhotoMeanwhile = (result: Record<string, unknown>) => {
+      h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'how much is sofa cleaning?' }])
+      h.generateReply.mockImplementation(async () => {
+        await dispatchInboundToAiReply(media('image'))
+        return result
+      })
+    }
+
+    it('does not lose the answer', async () => {
+      withPhotoMeanwhile(ANSWER)
+      await dispatchInboundToAiReply(ARGS)
+      expect(sentTexts()).toEqual([expect.stringContaining('Got your photo.'), ANSWER.text])
+    })
+
+    it('does not lose a customer’s yes: its own handoff still goes out', async () => {
+      withPhotoMeanwhile({ text: 'A colleague will call you.', handoff: true, tagged: true, ready: true, lead: { service: 'sofa', quoted_price_sar: 150, details: [] } })
+      await dispatchInboundToAiReply(ARGS)
+      expect(h.dispatchWebhookEvent.mock.calls.map((c) => c[3].reason)).toEqual(['other', 'customer_ready'])
+      expect(h.state.updateFilters).toContainEqual(['ai_handoff_summary', expect.stringContaining('one thing only')])
+      expect(sentTexts().at(-1)).toBe('A colleague will call you.')
+    })
+
+    it('a person taking the chat meanwhile still stops the answer', async () => {
+      h.generateReply.mockImplementation(async () => {
+        await dispatchInboundToAiReply(media('image'))
+        h.state.conv = { ...h.state.conv, assigned_agent_id: 'agent-3' }
+        return ANSWER
+      })
+      h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
+      await dispatchInboundToAiReply(ARGS)
+      expect(sentTexts()).not.toContain(ANSWER.text)
+    })
+  })
+
+  it('a question typed while the line is being sent is still answered', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'كم سعر الكنب؟' }])
+    const send = h.engineSendText.getMockImplementation()!
+    h.engineSendText.mockImplementationOnce(async (args) => {
+      await dispatchInboundToAiReply(ARGS)
+      return send(args)
+    })
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toContain(ANSWER.text)
+    expect(h.state.conv).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('flags the chat even when the line cannot be sent', async () => {
+    h.engineSendText.mockRejectedValue(new Error('Meta down'))
+    await expect(dispatchInboundToAiReply(media('video'))).resolves.toBeUndefined()
+    expect(h.state.conv).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('at the reply cap: the cap’s own handoff, and no promise to help', async () => {
+    h.state.conv = { ...h.state.conv, ai_reply_count: 3 }
+    h.state.messageRows = [sentHoursAgo(1, { sender_id: null })]
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'طيب' }])
+    await dispatchInboundToAiReply(media('video'))
+    expect(sentTexts()).toEqual([AR_LINE])
+    expect(h.state.updatePayload?.ai_handoff_summary).toMatch(/reached its limit of 3 replies.*sent a video/)
+    expect(h.dispatchWebhookEvent.mock.calls[0][3]).toMatchObject({ reason: 'reply_cap' })
+  })
+
+  it.each([
+    ['a rep has the chat', () => (h.state.conv = { ...h.state.conv, assigned_agent_id: 'agent-3' })],
+    ['a person paused the bot', () => (h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true, ai_handoff_summary: null })],
+    ['someone else wrote in the last 24 hours', () => (h.state.messageRows = [sentHoursAgo(2, { ai_generated: false })])],
+    ['the number is not on the test list', () => (h.state.testNumbers = ['966511111111'])],
+    ['the bot is off', () => h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplyEnabled: false }))],
+    ['a message-level automation is active', () => (h.state.autoResponders = [{ id: 'auto-1' }])],
+  ])('nothing when %s', async (_name, arrange) => {
+    arrange()
+    await dispatchInboundToAiReply(media('video'))
+    nothing()
+  })
+})

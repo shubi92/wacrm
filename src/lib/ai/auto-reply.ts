@@ -8,10 +8,15 @@ import {
   buildHandoffSummary,
   handoffFallbackMessage,
   isBotHandoffSummary,
+  isMediaSummary,
   isReplyCapSummary,
   isWaitingMessage,
+  mediaMessage,
+  mediaReceivedNote,
+  mediaSummary,
   replyCapSummary,
   waitingMessage,
+  type InboundMedia,
 } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -58,6 +63,9 @@ const WAITING_GAP_MS = 30 * 60 * 1000
 /** …and at most this many times per handoff (see `sendWaitingReply`). */
 const WAITING_MAX = 3
 
+/** A customer who sends videos, photos or files gets one line per this gap. */
+const MEDIA_GAP_MS = 30 * 60 * 1000
+
 const CONV_COLUMNS =
   'assigned_agent_id, ai_autoreply_disabled, ai_reply_count, ai_resumed_at, ai_handoff_summary'
 
@@ -76,6 +84,9 @@ interface DispatchArgs {
   /** Set when the inbound is a voice note (no typed text). The bot
    *  listens to it first, then answers the transcript like typed text. */
   voiceNote?: InboundVoiceNote
+  /** Set when the inbound is a video, photo or document, captioned or
+   *  not. The bot acknowledges it and flags the chat (`acknowledgeMedia`). */
+  media?: InboundMedia
 }
 
 /**
@@ -125,6 +136,9 @@ interface DispatchArgs {
  * when the account switched that on — otherwise silence, as before). If
  * it can't be understood the thread is handed to a person, never left
  * unanswered.
+ *
+ * A video, photo or document passes the same gates, then gets a fixed
+ * line instead of the model (see `acknowledgeMedia`).
  *
  * The 24h WhatsApp session window is inherently open here — we're
  * reacting to a customer message that just landed — so no separate
@@ -210,6 +224,10 @@ export async function dispatchInboundToAiReply(
     // (below). (The authoritative cap check for sending is the atomic
     // claim; that read can only lag a concurrent inbound, never run ahead.)
 
+    if (args.media) {
+      return await acknowledgeMedia(db, { ...args, ...handoffBase, media: args.media, afterHandoff, atCap })
+    }
+
     // Voice note: listen first. Deliberately AFTER every gate above, so a
     // customer's audio only leaves the system for a thread the bot may
     // actually answer (test numbers included). The transcript is saved on
@@ -276,6 +294,21 @@ export async function dispatchInboundToAiReply(
       systemPrompt,
       messages,
     })
+
+    // A photo that landed while the model was writing flagged the chat.
+    // That takes nothing from this answer (or this lead): carry on from
+    // the flagged chat, so the checks below don't drop it.
+    if (!conv.ai_autoreply_disabled) {
+      const { data: now } = await readConv()
+      if (
+        now &&
+        isMediaSummary(now.ai_handoff_summary) &&
+        handedOffByBot(now, config) &&
+        (now.ai_resumed_at ?? null) === (conv.ai_resumed_at ?? null)
+      ) {
+        conv = handoffBase.conv = now
+      }
+    }
 
     // Record token spend on the account's BYO key. Fire-and-forget so it
     // never adds latency to the customer-facing send: `logAiUsage`
@@ -514,6 +547,73 @@ export async function dispatchFormSubmissionToAiReply(
   }
 }
 
+/**
+ * The customer sent a video, photo or document, which the bot can't open:
+ * tell them a colleague will look and ask which service they need, and
+ * flag the chat by handing it off. No model call, no reply slot. The bot
+ * keeps answering: a handed-off chat nobody has taken is still read by
+ * the model, and the note says only the looking was handed off.
+ *
+ * Already handed off and not taken: the line only, no second handoff.
+ * At the reply cap the bot can't promise to help, so that is the cap's
+ * own handoff, with the media added to its note.
+ *
+ * One line per chat per `MEDIA_GAP_MS`, so an album gets one. "Resume AI"
+ * starts that afresh: a flag a person cleared can be raised again.
+ * ponytail: in-memory claim, like the waiting line's — a restart can let
+ * one extra line out.
+ */
+async function acknowledgeMedia(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: DispatchArgs & {
+    media: InboundMedia
+    conv: ConvRow
+    config: AiConfig
+    afterHandoff: boolean
+    atCap: boolean
+  },
+): Promise<void> {
+  const { accountId, conversationId, contactId, conv, config, media, atCap } = args
+  const claim = checkRateLimit(`ai-media:${conversationId}:${conv.ai_resumed_at ?? ''}`, {
+    limit: 1,
+    windowMs: MEDIA_GAP_MS,
+  })
+  if (!claim.success) return
+
+  // The line first, the flag after, unlike the other handoffs: a question
+  // typed in between is answered normally, where a chat flagged with no
+  // bot message on it yet would count as taken (`botStillHolds`).
+  try {
+    const messages = await buildConversationContext(db, conversationId)
+    const lastText =
+      media.caption ?? messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
+    await engineSendText({
+      accountId,
+      userId: args.configOwnerUserId,
+      conversationId,
+      contactId,
+      text: atCap ? handoffFallbackMessage(lastText) : mediaMessage(media.kind, lastText),
+      aiGenerated: true,
+    })
+  } finally {
+    if (!args.afterHandoff) {
+      const { notified } = await handOff(db, {
+        accountId,
+        contactId,
+        conversationId,
+        config,
+        conv,
+        fromPhone: args.fromPhone,
+        reason: atCap ? 'reply_cap' : 'other',
+        summary: atCap
+          ? `${replyCapSummary(config.autoReplyMaxPerConversation)} ${mediaReceivedNote(media.kind)}`
+          : mediaSummary(media.kind),
+      })
+      await notified
+    }
+  }
+}
+
 type ConvRow = {
   assigned_agent_id: string | null
   ai_autoreply_disabled: boolean
@@ -557,8 +657,8 @@ function handedOffByBot(conv: ConvRow, config: AiConfig): boolean {
 
 /**
  * The chat's outbound messages, newest first, back to the bot's last
- * message that is not the waiting line (its handoff goodbye, or its last
- * answer after the handoff): did a rep reply in that stretch (a sender is
+ * message that is not the waiting line (its handoff goodbye, its last
+ * answer after the handoff, or its line about a photo): did a rep reply in that stretch (a sender is
  * set — inbox, or the API with `sent_by_person`), and how many waiting
  * lines went out, the newest when. A Flow, automation or other API send
  * has no sender and does not count. Null on a read error.
@@ -607,7 +707,8 @@ async function readHandoff(
  * (`readHandoff`):
  *   - already sent `WAITING_MAX` times → done
  *   - sent less than `WAITING_GAP_MS` ago → not yet
- * A new handoff, or a real answer after one, starts the count afresh. No
+ * A new handoff, or a real answer or media line after one, starts the
+ * count afresh. No
  * bot message to count from → nothing sent.
  */
 async function sendWaitingReply(
