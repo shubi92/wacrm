@@ -5,7 +5,7 @@ import {
   type ChatMessage,
   type GenerateResult,
 } from './types'
-import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
+import { HANDOFF_SENTINEL, WAITING_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
 import { hasLeadTag, maskLeadBlocks, parseLeadBlock } from './lead'
@@ -131,8 +131,11 @@ export function parseGeneration(
   // reply. Like the other markers it never reaches the customer.
   const { form } = takeFormMarker(signals)
   const reply = takeFormMarker(body.split(LEAD_MARK).join('')).text
-  const text = hasLeadTag(reply) ? '' : reply.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, lead, ready, form, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
+  const waiting = signals.includes(WAITING_SENTINEL)
+  const text = hasLeadTag(reply)
+    ? ''
+    : reply.split(HANDOFF_SENTINEL).join('').split(WAITING_SENTINEL).join('').trim()
+  return { text, handoff, lead, ready, waiting, form, leadUnreadable: tagged && leadUnreadable, usage, tagged, raw, retried: false }
 }
 
 /** Stands in for a lead block while the output is parsed; never valid

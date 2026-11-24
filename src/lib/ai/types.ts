@@ -77,6 +77,9 @@ export interface GenerateResult {
   lead: HandoffLead | null
   /** The customer said yes. Implies `handoff` and a non-null `lead`. */
   ready: boolean
+  /** The model wrote `[[WAITING]]`: on a chat it already handed off,
+   *  the message is about that matter (see `buildSystemPrompt`). */
+  waiting: boolean
   /** The form the model asked to send with this reply
    *  (`[[FORM:name]]`), or null. See `@/lib/whatsapp/forms`. */
   form: string | null
