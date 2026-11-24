@@ -1513,6 +1513,12 @@ describe('dispatchInboundToAiReply — after a handoff, until a rep takes over',
       expect(sentTexts()).toEqual([AR_WAIT])
     })
 
+    it('in Arabic when the customer last sent only digits', async () => {
+      h.buildConversationContext.mockResolvedValue([{ role: 'user', content: '0500000000' }])
+      await dispatchInboundToAiReply(ARGS)
+      expect(sentTexts()).toEqual([AR_WAIT])
+    })
+
     it('in English when the customer last wrote in English', async () => {
       h.buildConversationContext.mockResolvedValue([
         { role: 'user', content: 'مرحبا' },
@@ -1793,6 +1799,15 @@ describe('dispatchInboundToAiReply — a video, photo or document', () => {
     ])
     await dispatchInboundToAiReply(media('video'))
     expect(sentTexts()).toEqual([VIDEO_EN])
+  })
+
+  it.each([
+    ['4', PHOTO_AR],
+    ['ok', expect.stringContaining('Got your photo.')],
+  ])('last text %j, then a photo', async (content, line) => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content }])
+    await dispatchInboundToAiReply(media('image'))
+    expect(sentTexts()).toEqual([line])
   })
 
   it('a caption counts as the customer’s last text for the language', async () => {

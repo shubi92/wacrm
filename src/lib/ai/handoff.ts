@@ -7,15 +7,15 @@ const MAX_QUOTE_LEN = 160
 
 /**
  * What the customer is told when the bot hands off without a message of
- * its own — a handoff must never be met with silence. Arabic when the
- * customer wrote in Arabic script, English otherwise.
+ * its own — a handoff must never be met with silence. Arabic or English
+ * by `isEnglish`.
  * ponytail: two fixed lines; move to ai_configs if an account needs its
  * own wording.
  */
 export function handoffFallbackMessage(lastCustomerText: string): string {
-  return isArabic(lastCustomerText)
-    ? 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
-    : 'Your request has been passed to our team and they will contact you shortly.'
+  return isEnglish(lastCustomerText)
+    ? 'Your request has been passed to our team and they will contact you shortly.'
+    : 'تم تحويل طلبك إلى فريقنا وسيتواصلون معك قريباً.'
 }
 
 const WAITING_AR = 'وصلت رسالتك 🌿 محادثتك الآن عند فريق المبيعات، وبيرد عليك أحد الزملاء في أقرب وقت.'
@@ -28,7 +28,7 @@ const WAITING_EN =
  * a fresh answer. Same language rule as `handoffFallbackMessage`.
  */
 export function waitingMessage(lastCustomerText: string): string {
-  return isArabic(lastCustomerText) ? WAITING_AR : WAITING_EN
+  return isEnglish(lastCustomerText) ? WAITING_EN : WAITING_AR
 }
 
 /** True for a message the bot sent with `waitingMessage`. */
@@ -62,10 +62,15 @@ const MEDIA_LINES: Record<InboundMedia['kind'], { name: string; ar: string; en: 
   },
 }
 
-/** Same language rule as `waitingMessage`, but Arabic when the customer
- *  has written nothing yet. */
+/** Same language rule as `waitingMessage`. */
 export function mediaMessage(kind: InboundMedia['kind'], lastCustomerText: string): string {
-  return lastCustomerText && !isArabic(lastCustomerText) ? MEDIA_LINES[kind].en : MEDIA_LINES[kind].ar
+  return isEnglish(lastCustomerText) ? MEDIA_LINES[kind].en : MEDIA_LINES[kind].ar
+}
+
+/** Language of the bot's fixed lines: English only for Latin letters with
+ *  no Arabic. A number, "؟", an emoji or nothing says nothing: Arabic. */
+function isEnglish(text: string): boolean {
+  return /\p{Script=Latin}/u.test(text) && !isArabic(text)
 }
 
 /** True when the text has any Arabic script in it. */
